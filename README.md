@@ -19,8 +19,8 @@ The first application scaffold contains a Next.js web app and a Fastify API in a
 
 ## Requirements
 
-- Node.js 20.9 or newer
-- pnpm 10 or newer (Corepack is recommended)
+- Node.js 22 or newer
+- pnpm 11.11.0 (managed through Corepack)
 
 ## Local development
 

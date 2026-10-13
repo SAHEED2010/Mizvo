@@ -3,7 +3,7 @@
   "private": true,
   "packageManager": "pnpm@11.11.0",
   "engines": {
-    "node": ">=20.9"
+    "node": ">=22"
   },
   "scripts": {
     "dev": "pnpm --filter @mizvo/shared-types build && pnpm --filter @mizvo/shared-schemas build && pnpm --parallel --filter @mizvo/web --filter @mizvo/api dev",
