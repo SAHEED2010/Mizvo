@@ -1,6 +1,6 @@
 # Technology baseline — living decisions
 
-The stack below represents the **team's current preferred build direction**. Exact dependency versions and service configuration will be selected during implementation. **Only ADR-001 is formally accepted** at present.
+The stack below represents the **team's current preferred build direction**. Exact dependency versions and service configuration will be selected during implementation. **ADR-001 and ADR-002 are formally accepted**. Other stack details remain proposals.
 
 | Layer | Preferred choice | Purpose |
 | --- | --- | --- |
@@ -11,7 +11,7 @@ The stack below represents the **team's current preferred build direction**. Exa
 | Validation | Zod | Structured input and model-output validation |
 | Database | Neon PostgreSQL | Persistent records for multiple businesses |
 | ORM | Drizzle | SQL queries, migrations, typed schemas |
-| Authentication | **Not finalized** | Must support sessions, invitations and per-business roles |
+| Authentication | **Better Auth + Phone Number + Organization plugins** | Accepted ADR-002: web/official WhatsApp onboarding, phone-first, optional verified email and secure sessions |
 | AI | Groq API initial candidate | Hosted language / audio models, no model training required |
 | AI integration | Replaceable provider adapter | Provider switching and explicit task contracts |
 | Financial logic | Custom TypeScript modules | Deterministic calculations, reconciliation and evidence handling |
@@ -29,7 +29,7 @@ The stack below represents the **team's current preferred build direction**. Exa
 - Use official WhatsApp integration only when permitted and properly configured.
 
 ## Decisions to make next
-- Authentication library/method, business invitation flows, session approach (ADR-002).
+- Implement ADR-002: signed-in phone identities, recovery enrollment, staff invitations, verified messaging adapter and tenant permission tests.
 - Financial data model and accounting conventions (ADR-003).
 - Message/transaction confirmation lifecycle and first API contracts.
 - Job orchestration, file storage and deployment.

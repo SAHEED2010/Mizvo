@@ -2,7 +2,7 @@
 
 ## Orientation
 1. Read `README.md`, `docs/PRODUCT.md`, `docs/ARCHITECTURE.md`, `docs/TECH_STACK.md`, `docs/FINANCIAL_RULES.md` and `docs/BUILD_PLAN.md`.
-2. Read **accepted** ADRs in `docs/decisions/`, especially ADR-001, before writing account or financial code.
+2. Read **accepted** ADRs in `docs/decisions/`, especially ADR-001 and ADR-002, before writing account, authentication, messaging or financial code.
 3. Confirm the exact assigned task. For major changes, give a short plan; never silently select a technology or behavior not yet decided.
 4. Work through reviewable branches and pull requests; do not implement unrelated features.
 
@@ -18,7 +18,7 @@
 - TypeScript; Next.js/React/Tailwind web; Fastify API; Neon PostgreSQL/Drizzle; Zod.
 - Groq is the initial AI API candidate; keep provider code behind a replaceable adapter.
 - One pnpm monorepo with modular services/packages. Avoid premature microservices and unnecessary infrastructure.
-- Temporal, worker infrastructure, authentication implementation, final API routes and financial database schema are not yet approved; follow the task and ADR process.
+- Authentication approach is accepted under ADR-002 (Better Auth + Phone Number + Organization + Neon/Drizzle; phone-first WhatsApp/web sign-up and optional email). Temporal, worker infrastructure, final financial API routes and financial data schema are not yet approved; follow the task and ADR process.
 - Financial calculations are deterministic and live outside UI and AI SDK modules.
 
 ## Account and authorization rules (ADR-001)
@@ -28,6 +28,15 @@
 - Prevent cross-business leakage from shared queries, caches, jobs and files.
 - Revoking a membership must stop future privileged access; record privileged membership changes in an audit history.
 - A WhatsApp sender's phone number is not sufficient authentication to access a business.
+
+## Authentication security rules (ADR-002)
+- Phone-first accounts can register on the web or via the official WhatsApp Cloud API when eligible/configured; email is optional. A webhook sender number alone is not authentication.
+- Better Auth handles identity/sessions and Organization memberships; Fastify verifies every protected business action.
+- Phone OTP: 5-minute expiry, maximum 3 wrong attempts, rate limits and single-use redemption. No real signup without compliant working OTP delivery.
+- Website sessions have a **hard** 7-day maximum (not sliding renewal), HTTPS Secure/HttpOnly cookies; sensitive operations require a real step-up within 10 minutes.
+- Owners must enroll an independent recovery method before any sensitive membership/account changes; staff may enroll optionally. Never bypass enrollment with a placeholder.
+- Phone-only invitations require owner-authorized server-side acceptance tied to a verified recipient; NEVER use temporary synthetic emails as deliverable invitation addresses.
+- No account linking, ownership changes, member invitations or real WhatsApp onboarding without the approved verification, recent step-up and audit path.
 
 ## Financial integrity
 - AI proposes structured drafts but **cannot directly post** financial records.

@@ -30,8 +30,15 @@ Mizvo is a WhatsApp-first financial intelligence and growth platform. With offic
 - Unimplemented commercial and financial integrations cannot be described as live.
 - Official WhatsApp policy eligibility, identity linking and data handling must be verified before real use.
 
+## Accepted onboarding policy (ADR-002)
+- Owners and staff can use a verified phone identity; a real email address is optional.
+- Users can register from the website or the official WhatsApp conversation, once eligibility and verification delivery are configured.
+- One Better Auth identity may hold multiple Organization memberships; business roles are enforced by the backend.
+- Owners must enroll an additional independent recovery method before sensitive account-management actions; staff recovery is optional.
+- Invitations may use a verified email or a verified phone, with expiring, single-use acceptance.
+
 ## Open product decisions
 - Exact scope and order of the first user-facing release.
-- Account sign-in and invitation delivery method.
+- The concrete OTP/email delivery vendor, verified WhatsApp account linkage and passkey/recovery-code implementation.
 - Stock costing, cash handling, Ajo workflow and supported business categories.
 - Report details, financing criteria and external evidence integrations.

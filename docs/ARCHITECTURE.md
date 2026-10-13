@@ -3,7 +3,7 @@
 ## Agreed operating model
 A **pnpm TypeScript monorepo** is the intended code organization. The website uses Next.js/React; a dedicated Fastify API will handle authenticated business operations and third-party integration adapters. Financial logic lives in independent modules. Database provider preference: Neon PostgreSQL with Drizzle.
 
-**ADR-001 is accepted:** the application is multi-tenant, with owners and staff and a per-business membership model; one user may belong to multiple businesses.
+**ADR-001 and ADR-002 are accepted:** the application is multi-tenant; identities use Better Auth's Phone Number and Organization plugins, with owner/staff memberships, phone-first website and authorized WhatsApp registration, optional email and secure recovery.
 
 ## Intended request flow
 
@@ -35,7 +35,7 @@ Official WhatsApp Business Platform (when approved/configured)
      Reports / business dashboard
 ```
 
-The API must verify business membership for all privileged operations, including AI lookups. Messages from third-party sources are untrusted until validated, authenticated and linked to the appropriate business.
+The API must verify business membership for all privileged operations, including AI lookups. Better Auth manages identity and sessions, and the Organization plugin manages membership; Fastify performs business-level authorization. Phone-first WhatsApp onboarding must use a verified official integration, never trust the sender number alone. Owners need a secondary recovery method before sensitive account management. Messages from third-party sources are untrusted until validated, authenticated and linked to the appropriate business.
 
 ## Proposed package structure (to be scaffolded through a reviewed task)
 
@@ -87,4 +87,4 @@ AI agent names describe **task responsibilities**, not separate autonomous model
 - Treat multi-tenant auth, sessions, data isolation and provider privacy as security-critical.
 
 ## Further design needed
-Sign-in/invitations, credential/session implementation, data schema, transaction semantics, route contracts, report integrity/storage, background processing, and deployment topology.
+The auth implementation must satisfy ADR-002 (including secure phone-only invitations, step-up authentication and owner recovery). Database schema details, transaction semantics, route contracts, report integrity/storage, background processing, and deployment topology remain to design.

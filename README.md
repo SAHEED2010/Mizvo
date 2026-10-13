@@ -68,4 +68,4 @@ The API reads `HOST` and `PORT` from the process environment. `.env.example` lis
 - [Build plan](docs/BUILD_PLAN.md)
 - [Architecture decisions](docs/decisions/README.md)
 
-Only [ADR-001](docs/decisions/001-multi-business-identity-and-access.md) is accepted. Authentication provider and methods, data/ledger schema, API contracts, jobs, files and deployment details remain pending.
+Accepted: [ADR-001](docs/decisions/001-multi-business-identity-and-access.md) (multi-business access) and [ADR-002](docs/decisions/002-authentication-whatsapp-onboarding-and-recovery.md) (Better Auth, phone-first registration, invitations and recovery). Authentication features are **not yet implemented**. The detailed financial model, APIs, jobs, files and deployment details remain pending.

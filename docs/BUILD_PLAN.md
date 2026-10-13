@@ -12,8 +12,8 @@
 
 ## Immediate engineering milestones
 1. **Repository scaffold:** pnpm workspace, Next.js/TypeScript/Tailwind web and Fastify/TypeScript API; no premature auth or financial endpoints.
-2. **Account/auth decision:** select sign-in library, member-invite flow and session security. Record ADR-002.
-3. **Business membership foundation:** create reviewed schema, implement registration, businesses, invitations and business-specific role checks.
+2. **Account/auth decision (accepted):** ADR-002 selects Better Auth, phone-first website/official WhatsApp onboarding, optional email, verified invitations, secure sessions and recovery requirements.
+3. **Business membership foundation — Build 002:** implement approved Better Auth/Drizzle schema and verified phone sign-in, business memberships, owner recovery enrollment, step-up checks, role guards and audited invitations in reviewable increments. External OTP/WhatsApp delivery needs separate approval and configuration; do not treat a stub as working authentication.
 4. **Financial model decision:** define purchases, sales, payments, inventory, Ajo and corrections before coding ledger.
 5. **Core finance:** implement deterministic rules with idempotency and tenant isolation.
 6. **AI parsing:** consume Groq-hosted API behind a provider adapter; validate proposals and obtain confirmation.

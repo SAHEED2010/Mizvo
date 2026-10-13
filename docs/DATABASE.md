@@ -14,8 +14,16 @@
 - Users, businesses, business memberships, invitations, administrative audit events.
 - Business-specific financial tables will reference the correct business/tenant.
 
+## Accepted auth design requirements (ADR-002)
+- Better Auth on Neon via Drizzle is the intended identity store, with Phone Number and Organization plugins.
+- User IDs are durable identifiers; verified phone and optional verified email are attributes, not business membership keys.
+- Phone-only temporary email values, where required by the plugin, are synthetic, non-deliverable and never count as a verified email.
+- Phone invitations require audited, expiring, single-use acceptance and custom recipient verification; email invitations follow Better Auth's verified-email pathway.
+- Owner recovery enrollment and recent step-up must be enforceable before sensitive account changes.
+- Model review must include uniqueness, concurrency, tenant isolation, revocation and auditability.
+
 ## Pending data design
-- How authentication sessions and invitation tokens will be represented.
+- Exact Better Auth plugin-generated schema/migrations, organization membership and custom phone invitation schema details.
 - Unique constraints, membership statuses and owner-transfer rules.
 - Transaction, line item, payment, debt and stock-movement representation.
 - Idempotency and correction events; money precision and inventory costing.
