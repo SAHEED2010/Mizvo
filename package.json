@@ -1,0 +1,21 @@
+{
+  "name": "mizvo",
+  "private": true,
+  "packageManager": "pnpm@11.11.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @mizvo/shared-types build && pnpm --filter @mizvo/shared-schemas build && pnpm --parallel --filter @mizvo/web --filter @mizvo/api dev",
+    "build": "pnpm --recursive --if-present build",
+    "typecheck": "pnpm --recursive --if-present typecheck",
+    "test": "pnpm --recursive --if-present build && pnpm --recursive --if-present test",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "format:check": "biome format ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.3.8",
+    "typescript": "^5.9.3"
+  }
+}

@@ -16,3 +16,4 @@ coverage/
 *.p12
 *.sqlite
 *.sqlite3
+dist/
