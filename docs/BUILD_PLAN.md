@@ -1,41 +1,37 @@
-# Hackathon build plan — preliminary
+# Mizvo — Iterative build plan
 
-**Goal:** demonstrate a working end-to-end financial-evidence journey. Not a production lender platform.
+**Goal:** Build a usable, account-based financial intelligence application for multiple independent businesses. Hackathon presentations may highlight current capabilities, but the product is not an artificial demo or restricted to a three-day development window.
 
-## Before Codex implements application code
-1. Review team/contest constraints, initial demo scope and whether a single seeded business is enough.
-2. Accept ADRs for transaction semantics, account model, AI schema and initial endpoints.
-3. Define financial acceptance tests using synthetic examples.
-4. Divide work with clear ownership between frontend, backend, AI and research.
-5. Confirm whether a live WhatsApp integration is policy-permitted; retain chat simulator fallback.
+## Agreed priorities
+- Create a sound TypeScript monorepo with Next.js website and Fastify API.
+- Support secure user identity and independent business memberships (ADR-001).
+- One user may own or work in multiple businesses with different roles.
+- All financial and AI requests must respect business boundaries.
+- Connect official WhatsApp through approved configuration and policy review, not an unofficial or imitation client.
+- Keep the financial engine deterministic and reports transparent about evidence status.
 
-## Proposed implementation sequence
-- **Foundation:** pnpm workspace; Next.js frontend and Fastify backend; shared Zod schemas; Neon/Drizzle setup.
-- **Financial core:** purchases, sales, partial payments, stock movements, corrections and deduplication with tests.
-- **AI adapter:** Groq provider and structured extraction of **draft** transactions.
-- **Confirmation:** user reviews proposed records; deterministic code performs posting.
-- **Dashboard:** transactions, stock and owed amounts using backend data.
-- **Report:** simple downloadable financial summary showing limitations/evidence sources.
-- **Financing demo:** readiness checklist with *illustrative*, not live, product criteria.
-- **Deploy and rehearse:** Render and a locally recorded fallback in case of network problems.
+## Immediate engineering milestones
+1. **Repository scaffold:** pnpm workspace, Next.js/TypeScript/Tailwind web and Fastify/TypeScript API; no premature auth or financial endpoints.
+2. **Account/auth decision:** select sign-in library, member-invite flow and session security. Record ADR-002.
+3. **Business membership foundation:** create reviewed schema, implement registration, businesses, invitations and business-specific role checks.
+4. **Financial model decision:** define purchases, sales, payments, inventory, Ajo and corrections before coding ledger.
+5. **Core finance:** implement deterministic rules with idempotency and tenant isolation.
+6. **AI parsing:** consume Groq-hosted API behind a provider adapter; validate proposals and obtain confirmation.
+7. **WhatsApp:** connect the official service if integration eligibility and configuration are approved.
+8. **Website and reports:** operational views, authorized corrections and downloadable evidence-labeled documents.
+9. **Financing readiness:** requirements and illustrative scenarios; do not claim lender acceptance.
+10. **Operational readiness:** security, data protection, deployments, access control, monitoring and tests.
 
-## Three-day illustrative schedule (not a promise)
-- Day 1: contracts, workspace, database, financial core.
-- Day 2: AI extraction, confirmation, dashboard wiring.
-- Day 3: reports, financing readiness, testing, deployment.
-- Day 4: presentation, rehearsals and demo.
+## Implementation rules
+- One scoped issue and reviewable PR at a time; never require completing every design topic before beginning infrastructure scaffolding.
+- Explicitly track which features work and which are planned.
+- Use generated/synthetic data for automated tests while designing the application for real authorized users.
+- Do not create production customer accounts or process their information until privacy and security requirements are in place.
+- Do not claim external integrations are live until verified.
 
-Scope should be reduced if core flow is unstable. Voice and receipts are stretch goals. WhatsApp must be clearly labeled simulated if it is not a live official integration.
-
-## Acceptance criteria for first complete demo
-- Confirmed sample purchase/sale updates database and dashboard exactly once.
-- AI error can be corrected before posting.
-- Partial payment does not change recorded sales value.
-- Ajo payout is not treated as sales revenue.
-- Missing opening stock is not fabricated.
-- Report identifies self-reported information.
-- Demo contains no real personal or financial data.
-- Every team member can explain their module and known limitations.
-
-## Next documentation tasks
-Finalize `DATABASE.md`, `API_CONTRACTS.md` and acceptance tests *after* team decisions. Then assign Codex small scoped implementation tasks, one pull request at a time.
+## What counts as progress
+- Repo builds and lints.
+- API and web can run locally.
+- Multi-business isolation tests pass once accounts are implemented.
+- Transaction posting is atomic, reversible through audited correction and deduplicated.
+- AI cannot bypass confirmation or permission checks.

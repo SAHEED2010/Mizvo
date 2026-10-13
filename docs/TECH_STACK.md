@@ -1,38 +1,35 @@
-# Technology stack — baseline and decision status
+# Technology baseline — living decisions
 
-**Status:** Discussed baseline. Do not treat all entries as accepted ADRs.
+The stack below represents the **team's current preferred build direction**. Exact dependency versions and service configuration will be selected during implementation. **Only ADR-001 is formally accepted** at present.
 
-| Area | Working choice | Current status / reasoning |
+| Layer | Preferred choice | Purpose |
 | --- | --- | --- |
-| Repository | GitHub, pnpm workspaces | Proposed; convenient for two apps and shared TypeScript |
-| Frontend | Next.js, React, TypeScript | Team's desired full-stack web UI; React is included in Next.js |
-| CSS | Tailwind CSS | Proposed styling approach |
-| Backend | Fastify on Node.js | Requested dedicated API to serve chat and web |
-| Validation | Zod | Proposed runtime validation for external/AI outputs |
-| Database | Neon PostgreSQL | Preferred managed PostgreSQL provider |
-| ORM | Drizzle | Proposed migrations and typed database access |
-| AI inference | GroqCloud API | Budget-conscious development candidate, subject to current quotas |
-| AI model(s) | Configurable per task | Must benchmark speech, Nigerian amounts and language examples |
-| Financial core | Own deterministic TypeScript code | Essential product logic; no LLM as ledger |
-| Messaging | Meta WhatsApp Cloud API | Conditional on approved service use; simulator fallback |
-| Hosting | Render | Initial choice for demo; free-tier sleep/limits require rehearsal |
-| Background jobs | None initially | Add a durable queue/worker or Temporal only if needed |
-| Automated tests | Vitest | Proposed for calculation/integration tests |
-| End-to-end tests | Playwright | Optional if time permits |
-| Object storage | Undecided | Needed only when documents are in scope |
-| Authentication | Undecided | Critical choice based on demo scope and access boundaries |
-| PDF generator | Undecided | Select when reports are specified |
+| Monorepo | pnpm workspaces | Shared TypeScript packages; independent web/API apps |
+| Frontend | Next.js + React + TypeScript | Website routes, components, business dashboards |
+| UI styling | Tailwind CSS | Responsive Mizvo-branded interface |
+| Backend | Node.js + Fastify | APIs, business authorization, external integrations |
+| Validation | Zod | Structured input and model-output validation |
+| Database | Neon PostgreSQL | Persistent records for multiple businesses |
+| ORM | Drizzle | SQL queries, migrations, typed schemas |
+| Authentication | **Not finalized** | Must support sessions, invitations and per-business roles |
+| AI | Groq API initial candidate | Hosted language / audio models, no model training required |
+| AI integration | Replaceable provider adapter | Provider switching and explicit task contracts |
+| Financial logic | Custom TypeScript modules | Deterministic calculations, reconciliation and evidence handling |
+| WhatsApp | Official Meta WhatsApp Cloud API | Planned messaging integration, subject to actual policy eligibility |
+| Background tasks | Not finalized | Decide once workload and hosting constraints are clearer |
+| Hosting | Render candidate | Deployment option, not a requirement |
+| Documents | Not finalized | Private object storage and report generation decisions pending |
+| Testing | Vitest, integration tests | Math, data integrity, tenant isolation, authorization |
 
-## Cost control
-- Use fictional sample data and local runs before deploying anything.
-- Provider credentials must stay server-side and out of GitHub.
-- An AI API is not a free unlimited resource; document usage limits and error fallback.
-- Do not depend on production reliability from free hosting tiers.
+## Current architecture guardrails
+- Build a usable application for multiple separate businesses, not a one-business hackathon imitation.
+- Do not write unapproved auth schemas, route names or service integrations into generated code.
+- Development milestones should be small, but there is no arbitrary three-day lifespan.
+- Keep AI extraction separate from trusted financial posting.
+- Use official WhatsApp integration only when permitted and properly configured.
 
-## ADRs still needed
-1. Exact first-demo scope and account model.
-2. Financial-event entities and accounting conventions.
-3. Authentication/authorization approach.
-4. AI output contract and provider/model benchmark.
-5. Reports, evidence states and persistence.
-6. API endpoint contract and deployment environment.
+## Decisions to make next
+- Authentication library/method, business invitation flows, session approach (ADR-002).
+- Financial data model and accounting conventions (ADR-003).
+- Message/transaction confirmation lifecycle and first API contracts.
+- Job orchestration, file storage and deployment.

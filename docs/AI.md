@@ -1,35 +1,34 @@
-# AI architecture and agent responsibilities
+# AI integration and logical agents
 
-**Status:** Proposed. We are **consuming** existing model APIs, not training a foundation model.
+**Status:** Design baseline, not deployed. Mizvo will consume a hosted AI API rather than train its own foundation model.
 
-## Provider boundary
-Start by evaluating Groq-hosted models for natural-language transaction extraction and speech transcription. Keep provider SDK calls inside `packages/ai/src/providers/` so a different provider can be substituted. Confirm current model names, rate limits and terms during implementation.
+## Provider approach
+GroqCloud is the current initial provider candidate for natural-language extraction and audio transcription. Evaluate exact models, costs, terms, privacy and accuracy before locking IDs. Isolate SDK calls behind an interchangeable provider adapter.
 
-## Conceptual agents
-- **Intent agent:** decide whether a message describes a transaction, asks a question or needs clarification.
-- **Transaction agent:** propose structured purchase, sale, expense, payment, inventory or debt information.
-- **Clarification agent:** ask for missing amounts, units, dates, payment status and ambiguous phrases.
-- **Insights agent:** explain financial-engine outputs in clear language; never invent balances.
+## Agent responsibilities (logical modules)
+- `intent`: classify the user's request (recording, querying, clarification).
+- `transaction`: extract a **proposed** sale, purchase, payment or other business event.
+- `clarification`: resolve missing/ambiguous amounts, units, dates and payment status.
+- `insights`: explain **already computed and authorized** business figures in plain language.
 
-These are task-specific modules, **not necessarily four independent AI calls or an autonomous agent swarm**. Favor the simplest orchestration that passes tests.
+An agent folder does not mean four separate autonomous LLM agents or four API charges for every message.
 
-## Required data flow
-1. Receive message from website simulator or authorized WhatsApp integration.
-2. Treat source text, audio and documents as untrusted data.
-3. Use the provider for interpretation/transcription as appropriate.
-4. Validate JSON output against a schema (to be designed in `API_CONTRACTS.md`).
-5. Require clarification or confirmation before any financial posting.
-6. Submit the confirmed event to the financial core and database transaction.
-7. Return the computed result to the owner.
+## Processing boundaries
+1. Receive text/voice/document through a properly authorized and verified integration.
+2. Establish business context through authenticated/authorized user membership. Do not infer ownership from message content or phone number alone.
+3. Interpret through hosted AI, checking provider errors/rate limits.
+4. Validate structured output and retain it as a draft, not a posted transaction.
+5. Obtain user confirmation where appropriate.
+6. Run deterministic accounting code and post atomically to the correct business.
+7. Return accurate, limited and permission-scoped results.
 
-## Rules
-- Never ask the model to calculate final financial balances.
-- Never give the model broad direct database write access.
-- Do not automatically classify Ajo receipts as sales or loans as income.
-- AI-derived values are not independently verified facts.
-- Do not fabricate receipt OCR values or fill in omitted inventory quantities.
-- Keep prompts free of secrets and other businesses' records.
-- Log errors and schema-validation failures without storing unnecessary sensitive prompts.
+## Security and correctness
+- Restrict AI access to the minimum authorized business data needed.
+- Do not let user text, receipts or message attachments override system instructions or permissions.
+- Never expose API keys in the frontend or stored messages.
+- External content is not independently verified just because the model interprets it.
+- No AI tool may execute unrestricted SQL or bypass confirmation.
+- Use only permitted and appropriately protected data with external AI services.
 
-## Pending decisions
-Specific Groq model IDs, strict JSON schema, voice/receipt scope, evaluation set, token and cost limits, data retention and vendor processing terms. An example prompt is not a substitute for these contracts.
+## Further decisions
+Model IDs and extraction schemas, exact WhatsApp linking/auth workflow, data retention, cost controls, retries and job processing.

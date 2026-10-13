@@ -1,38 +1,37 @@
 # Product brief — Mizvo
 
-**Status:** Working proposal. Demo scope must be reviewed before coding.
+**Status:** Living product specification for an application intended for real business users.
 
 ## Problem
-Nigerian small businesses may record purchases, cash/POS/bank payments, debts, inventory, and informal savings separately. This can make it difficult for owners to explain performance or prepare useful documentation when seeking financing and growth opportunities.
+Many Nigerian SMEs keep business information across cash, bank/POS payments, receipts, stock notes, customer and supplier debts and informal savings. This can obscure business performance and hinder financing preparation.
 
-## Proposed solution
-A WhatsApp-first assistant for recording and understanding everyday business activity, backed by a deterministic financial engine. Owners can review, correct and download records through a website. Financing-readiness information is educational and based on documented requirements; Mizvo does **not** approve or provide loans.
+## Product
+Mizvo is a WhatsApp-first financial intelligence and growth platform. With official WhatsApp integration, authorized business members will describe activity via text and voice notes and may provide supporting documents. The backend interprets information, requests clarification and records confirmed financial events. A website will support viewing, updating and downloading records/reports. Financial-product and commercial opportunity capabilities will be introduced when verified, authorized information is available.
 
-## Users
-Initial illustrative user: Nigerian micro or small trader/retailer. The broader concept includes women-led, informal and partially digitized SMEs, including services where inventory is optional.
+## Account model (accepted ADR-001)
+- Multiple independent businesses, with separate and access-controlled financial information.
+- Owners and staff have separate logins and business-specific roles.
+- One person can belong to multiple businesses and have different roles in each.
+- Owners manage invitations, membership and external report sharing.
+- Protected operations must be authorized for the active business.
 
-## First complete demonstration journey
-1. Merchant describes purchase and sale in conversational text.
-2. AI produces a **draft**, asking questions when facts are missing.
-3. User confirms/corrects the draft.
-4. System posts purchase/sale and separate payment records.
-5. Dashboard displays stock movement, amounts owed and appropriately scoped profit figures.
-6. User downloads a report with transparent evidence labels.
-7. Financing-readiness view identifies missing information and shows clearly illustrative financing requirements.
+## End-to-end workflow goal
+1. An authorized member sends a business message using the approved connected channel.
+2. The AI provider proposes structured information, indicating uncertainty.
+3. The user corrects or confirms the proposed record.
+4. Application rules update relevant financial records and inventory.
+5. Authorized members can review records and reports on the website.
+6. Financing-readiness tools explain what records are available or missing; lenders retain financing decisions.
 
-## What we should NOT claim
-- That the system independently verifies every self-reported transaction.
-- That a report signature proves business activity was true.
-- That lender integrations, approvals, bank data or commercial partnerships already exist.
-- That a fictional or seeded opportunity is a real buyer match.
-- That initial demo accuracy or impact is already established.
+## Product boundaries
+- AI interpretation is not independent transaction verification.
+- Reports may be checkable for integrity without independently proving the facts contained in them.
+- Mizvo does not take deposits, approve/issue loans or claim guaranteed financing.
+- Unimplemented commercial and financial integrations cannot be described as live.
+- Official WhatsApp policy eligibility, identity linking and data handling must be verified before real use.
 
-## Pending scope decisions
-- One seeded demo business or multiple isolated business accounts?
-- Authentication: demo-only fixture or real website sign-in?
-- Text-only core versus voice and receipt handling in demo?
-- Which inventory costing method and which kinds of local units?
-- Which financing-readiness screens are necessary for the presentation?
-- Can WhatsApp be used compliantly, or should we demonstrate in a simulator?
-
-See `BUILD_PLAN.md` and forthcoming ADRs. Do not assume these questions are already settled.
+## Open product decisions
+- Exact scope and order of the first user-facing release.
+- Account sign-in and invitation delivery method.
+- Stock costing, cash handling, Ajo workflow and supported business categories.
+- Report details, financing criteria and external evidence integrations.

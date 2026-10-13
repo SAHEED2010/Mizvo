@@ -1,37 +1,25 @@
-# Financial data model — design worksheet
+# Data modeling — principles and open decisions
 
-**Status: NOT FINALIZED. No migrations should be generated from this document yet.**
+**Status:** Database design **not finalized**. This is not a migration or approved SQL schema.
 
-## Entities to evaluate
-- `businesses`: business identity and settings.
-- `users` / `memberships`: only if multi-account login is approved.
-- `products`, `units`: catalog and unit conversion.
-- `transactions`, `transaction_items`: purchases, sales, expenses and corrections.
-- `payments`: amount received or paid; may settle a separate sale or purchase.
-- `inventory_movements`: changes with a traceable source.
-- `obligations`: customer receivables and supplier payables.
-- `ai_drafts`: model-extracted proposals awaiting confirmation.
-- `evidence`: source, provenance and corroboration status.
-- `audit_events`: append-only significant changes.
-- `reports`: generated versions and integrity metadata.
-- `message_receipts`: message IDs/idempotency metadata if live messaging is approved.
+## Accepted identity and tenant invariants (ADR-001)
+- Independent businesses share managed PostgreSQL infrastructure.
+- A user identity may be a member of multiple businesses with different roles.
+- At least one owner must remain for each active business.
+- Business-scoped records must never be accessed across unauthorized memberships.
+- Member invitations, role changes and revocations require auditability.
+- An active business identity is not sufficient authorization by itself: every request must be checked against the authenticated user.
 
-Names above are **candidates**, not a schema contract.
+## Likely identity entities (logical, not final table definitions)
+- Users, businesses, business memberships, invitations, administrative audit events.
+- Business-specific financial tables will reference the correct business/tenant.
 
-## Questions to decide before migrations
-1. Single fictional demo business or genuine multi-tenant model?
-2. How are a sale, payment and inventory movement linked without double counting?
-3. Exact money representation (integer kobo and/or decimal numeric).
-4. Costing method (for example weighted average), quantities and unit conversions.
-5. Corrections: reversing event versus mutable row with audit history.
-6. Opening stock unknown versus initialized/confirmed.
-7. Idempotency keys and uniqueness constraints.
-8. Evidence states, business permissions and report versioning.
+## Pending data design
+- How authentication sessions and invitation tokens will be represented.
+- Unique constraints, membership statuses and owner-transfer rules.
+- Transaction, line item, payment, debt and stock-movement representation.
+- Idempotency and correction events; money precision and inventory costing.
+- Provenance and evidence statuses; reports and verification records.
+- Database-level tenant guards and any row-level security strategy.
 
-## Invariants regardless of schema
-- Posting must be atomic, scoped and idempotent.
-- Purchase/sale/payment events remain distinguishable.
-- Corrections must be traceable.
-- Unknown information remains unknown rather than zero by assumption.
-
-See `FINANCIAL_RULES.md`.
+**Do not implement account or financial database migrations based solely on this worksheet.** Finalize the relevant ADR and reviewed schema first.

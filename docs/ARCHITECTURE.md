@@ -1,27 +1,50 @@
-# Architecture — proposed, not implemented
+# Architecture — baseline and accepted boundaries
 
-## Operating model
-A single TypeScript **pnpm monorepo** containing a Next.js website, Fastify API and reusable libraries. This is a **modular backend**, not a microservices system.
+## Agreed operating model
+A **pnpm TypeScript monorepo** is the intended code organization. The website uses Next.js/React; a dedicated Fastify API will handle authenticated business operations and third-party integration adapters. Financial logic lives in independent modules. Database provider preference: Neon PostgreSQL with Drizzle.
+
+**ADR-001 is accepted:** the application is multi-tenant, with owners and staff and a per-business membership model; one user may belong to multiple businesses.
+
+## Intended request flow
 
 ```text
-Owner → WhatsApp (if permitted) or labeled chat simulator
-      → Fastify API / message adapter
-      → AI adapter (Groq-hosted model) → validated transaction draft
-      → user clarification / confirmation
-      → deterministic financial engine
-      → Neon PostgreSQL + audit history
-      → Next.js website and downloadable evidence-labeled reports
+Official WhatsApp Business Platform (when approved/configured)
+              │
+              ▼
+       Fastify backend  ◄────►  Next.js website
+              │                   (authorized browser user)
+              ▼
+     Authorized business context
+              │
+              ▼
+    AI provider adapter (Groq candidate)
+              │
+              ▼
+       Validated record draft
+              │
+              ▼
+     Clarification / confirmation
+              │
+              ▼
+   Deterministic financial engine
+              │
+              ▼
+  Neon PostgreSQL + audit history
+              │
+              ▼
+     Reports / business dashboard
 ```
 
-The website and chat share business data and access controls. Direct monetary calculations never rely on an LLM response.
+The API must verify business membership for all privileged operations, including AI lookups. Messages from third-party sources are untrusted until validated, authenticated and linked to the appropriate business.
 
-## Proposed source layout, to create after approval
+## Proposed package structure (to be scaffolded through a reviewed task)
+
 ```text
 mizvo/
   AGENTS.md
   apps/
-    web/                  # Next.js + React + TypeScript
-    api/                  # Fastify routes, authorization, integrations
+    web/                       # Next.js / React / TypeScript
+    api/                       # Fastify and authorized API integrations
   packages/
     ai/
       src/
@@ -33,15 +56,13 @@ mizvo/
         providers/
           groq.provider.ts
         orchestrator.ts
-        prompts/
     financial-core/
       src/
         sales.ts
         purchases.ts
-        payments.ts
         inventory.ts
+        payments.ts
         reconciliation.ts
-        financing.ts
     database/
       schema/
       migrations/
@@ -49,30 +70,21 @@ mizvo/
       schemas/
       types/
     reports/
-  tests/
   docs/
+  tests/
   pnpm-workspace.yaml
 ```
 
-Agent modules describe **responsibilities**, not a requirement to spawn multiple independent agents. One model call may cover multiple tasks; each output still requires schema validation and confirmation.
+AI agent names describe **task responsibilities**, not separate autonomous models or mandatory additional provider calls. Prefer clear testable modules.
 
-## Components
-- **Web:** business dashboard, record review/correction, reports; no website voice feature required.
-- **API:** authenticated business boundaries, request validation, transaction application, WhatsApp webhook adapter if permitted.
-- **AI:** external text/audio/image services behind an interchangeable adapter; proposes data but does not post it.
-- **Financial core:** pure TypeScript functions, deterministic calculations, reconciliation, idempotency.
-- **Database:** structured business records, evidence metadata, corrections and traceable histories.
-- **Report module:** documents disclose source/verification limitations.
-- **Background processing:** **deferred** for initial demo unless a long-running task requires it. Do not imply that a reliable workflow engine has been deployed.
-- **WhatsApp:** integration conditional on current service eligibility and policies; a local simulator is an explicitly named fallback.
+## Architectural constraints
+- Do not use separate databases per business without a further decision.
+- Do not rely solely on frontend filtering; enforce tenant and role permissions in the backend and suitable database policies.
+- Use idempotency and database transactions to prevent duplicate or partially applied financial postings.
+- Avoid a model's direct write access to posted financial records.
+- Do not commit to Temporal, a job queue, storage provider, or precise API endpoints before their respective decisions.
+- Integrate WhatsApp via authorized official APIs only; there is no approved simulator feature.
+- Treat multi-tenant auth, sessions, data isolation and provider privacy as security-critical.
 
-## Trust boundaries and failure cases
-- Untrusted messages and uploaded documents must not become agent instructions.
-- Validate incoming webhooks and deduplicate message IDs where applicable.
-- Scope every database read/write by an authorized business.
-- Save only confirmed events; retain drafts and corrections separately.
-- A failed AI call must not corrupt committed financial data.
-- Hosted model availability, slow startup on free hosting and network outages require demo fallbacks.
-
-## Open design questions
-Authentication, session strategy, multi-tenant data isolation, schema details, API payloads, inventory valuation, money precision, report format and jobs are not finalized. Record final choices in ADRs before Codex builds them.
+## Further design needed
+Sign-in/invitations, credential/session implementation, data schema, transaction semantics, route contracts, report integrity/storage, background processing, and deployment topology.
