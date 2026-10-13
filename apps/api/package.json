@@ -12,7 +12,7 @@
   "dependencies": {
     "@mizvo/shared-schemas": "workspace:*",
     "@mizvo/shared-types": "workspace:*",
-    "fastify": "5.12.7"
+    "fastify": "5.12.5"
   },
   "devDependencies": {
     "@types/node": "^24.10.0",
