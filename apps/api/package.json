@@ -15,9 +15,11 @@
     "@mizvo/database": "workspace:*",
     "@mizvo/shared-schemas": "workspace:*",
     "@mizvo/shared-types": "workspace:*",
+    "africastalking": "0.8.4",
     "better-auth": "1.7.7",
     "drizzle-orm": "0.45.4",
-    "fastify": "5.12.5"
+    "fastify": "5.12.5",
+    "libphonenumber-js": "1.13.15"
   },
   "devDependencies": {
     "@types/node": "^24.10.0",

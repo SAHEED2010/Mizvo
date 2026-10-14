@@ -1,26 +1,33 @@
-# Authentication foundation (Phase A)
+# Phone authentication setup
 
-## Implemented
+Build 002 Phase B implements a website phone OTP flow through Better Auth's Phone Number plugin. For an existing verified phone it signs the user in; for a new phone it creates the account only after OTP verification. Business creation and membership setup are later work.
 
-- Better Auth is configured in the Fastify API with the Drizzle adapter and PostgreSQL schema.
-- The Phone Number plugin uses five-minute OTPs, three allowed attempts, verified-phone requirements, and a non-deliverable `users.invalid` placeholder for phone-only identities.
-- OTP delivery intentionally throws until an approved provider is configured. No OTP, registration or login request can succeed through an unconfigured delivery path.
-- The Organization plugin is the canonical source of business membership and supports only owner, manager, staff and viewer roles. The built-in `member` default is removed, membership creation requires an explicit role, and organization creation is disabled in this phase.
-- Organization server-side member creation and invitation hooks reject missing, built-in, multi-role, or otherwise unsupported roles; the database role check remains the final membership guard when invitations are accepted.
-- API helpers obtain identity from a verified Better Auth session and read membership from the Organization-backed `member` table for the explicitly requested business.
-- The Drizzle schema and migrations were generated from Better Auth's configured plugins. `db:auth-schema` runs a checked augmentation script to retain Mizvo's membership uniqueness and role check constraints after generation. Migrations serialize owner removal, demotion, and moves from an organization so a business cannot lose its last owner under concurrent updates.
-- Business/organization deletion is unsupported in Phase A. The owner guard intentionally rejects a cascading deletion that would remove the final owner. Before business deletion is enabled, design an explicit reviewed teardown path and integration test rather than bypassing the guard.
-- `AUTH_ENABLED` defaults to `false`; auth routes are not registered unless explicitly enabled.
+## Current behavior
 
-## Not enabled in Phase A
+- Only valid Nigerian mobile numbers are supported. The website accepts common national input and sends canonical `+234` E.164 values to the API.
+- Better Auth generates six-digit codes, expires them after five minutes, allows at most three wrong attempts and consumes them once. The delivery adapter does not verify or store a second copy of a code.
+- Requests and verification attempts are rate-limited by Better Auth's persistent IP limit and additional database-backed IP/phone buckets. Phone request budgets are three per fifteen minutes; verification budgets are ten per phone per fifteen minutes.
+- Browser auth goes through the same-origin `/api/auth` Next.js rewrite. API POSTs require an exact configured `Origin`. Sessions use HttpOnly, SameSite=Lax cookies, Secure cookies in production, and an absolute seven-day expiry with refresh disabled. The API validates sessions using Better Auth and signs out through its session revocation endpoint.
+- Optional email is unavailable. Email change is disabled and a phone-only account's Better Auth placeholder uses the reserved `.invalid` domain, remains unverified and cannot be used for delivery.
+- Failed or missing SMS configuration returns a generic failure. No user session is created on delivery failure. The public API never returns an OTP; provider errors, OTP values and raw provider responses are not logged.
 
-Website sign-in UX and its delivery provider, business onboarding, invitation delivery/acceptance, recovery enrollment, step-up checks, WhatsApp integration, financial routes, and production account creation are separate phases. Do not enable auth routes for real users until OTP delivery, rate limits, origin/CSRF controls, session lifetime, recovery and operational monitoring have been configured and reviewed.
+## Enabling authentication
 
-## Local setup
+`AUTH_ENABLED` remains `false` in `.env.example`. Do not enable it for real users until all deployment and vendor checks are complete.
 
-1. Use Node.js 22+ and pnpm 11.11.0.
-2. Copy `.env.example` to `.env` and set a development-only PostgreSQL `DATABASE_URL` and a random `BETTER_AUTH_SECRET` of at least 32 characters.
-3. Leave `AUTH_ENABLED=false` unless working on a specifically reviewed auth integration task. The default OTP sender rejects requests; do not replace it with a logging or echo sender.
-4. Generate schemas and migrations with the database package scripts, review the diff (including the custom augmentation), and run migrations only against an explicitly selected development database. `pnpm db:auth-schema` preserves Mizvo's unique membership index and role check and fails if Better Auth changes the generated member table shape.
-5. Run `pnpm test:postgres` only with the isolated local database named `mizvo_test`; the integration suite refuses non-local or differently named database URLs. CI uses an ephemeral PostgreSQL 16 service.
-6. Do not put real secrets, phone numbers, business records or customer information in source control or logs.
+Set the following in the **API server's secret environment**, never in a `NEXT_PUBLIC_*` variable or a browser bundle:
+
+- `AUTH_ENABLED=true`
+- `DATABASE_URL` for the intended PostgreSQL database after applying committed migrations
+- `BETTER_AUTH_SECRET` with at least 32 random characters
+- `BETTER_AUTH_URL` for the public auth origin configured in deployment
+- `BETTER_AUTH_TRUSTED_ORIGINS` as a comma-separated list of exact website origins (scheme, host and port)
+- `AT_ENVIRONMENT=production`, `AT_USERNAME`, `AT_API_KEY` and an Africa's Talking `AT_SENDER_ID` that has actually been approved for Nigeria
+- `MIZVO_API_ORIGIN` in the Next.js server environment, pointing at the private Fastify API origin
+- `TRUSTED_PROXY_CIDRS` only when Fastify is behind known reverse proxies; list only their actual IPs/CIDRs
+
+No provider account, sender ID, funds or real credentials are provisioned by this code change. Confirm account eligibility, current pricing, transaction message rules, Nigerian sender requirements and delivery terms with Africa's Talking before use. Never treat a `Processed`, `Sent`, `Queued` or SDK success response as handset delivery; this adapter reports it only as accepted by the provider. Delivery reports are not configured in Phase B.
+
+For authorized provider sandbox testing, explicitly set `AT_ENVIRONMENT=sandbox`, use the vendor's sandbox account username and credentials, and remember that the sandbox response does not demonstrate real SMS delivery. CI uses an injected fake transport and does not contact the vendor.
+
+Apply migrations with the repository's PostgreSQL migration process before enabling auth. CI's PostgreSQL integration tests only target the isolated local `mizvo_test` database. Production needs a separate security/privacy and deployment review, including HTTPS, proxy IP forwarding, OTP retention and provider contract review.
