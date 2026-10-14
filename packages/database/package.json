@@ -4,9 +4,24 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./schema/auth": {
+      "types": "./dist/schema/auth.d.ts",
+      "import": "./dist/schema/auth.js"
+    }
   },
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "db:auth-schema": "pnpm dlx auth@1.7.7 generate --adapter drizzle --dialect postgresql --config ../../apps/api/src/auth/schema.config.ts --output src/schema/auth.ts --yes",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
     "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "drizzle-orm": "0.45.4",
+    "postgres": "3.4.9"
   }
 }

@@ -15,7 +15,7 @@ Mizvo is a WhatsApp-first financial intelligence and growth application for Nige
 
 ## Repository status
 
-The first application scaffold contains a Next.js web app and a Fastify API in a pnpm TypeScript monorepo. The API exposes only a public health check. Authentication, business membership flows, financial data, AI, WhatsApp and database integrations remain future work and require their own decisions.
+The first application scaffold contains a Next.js web app and a Fastify API in a pnpm TypeScript monorepo. The API exposes a public health check. Phase A of authentication adds the Better Auth server configuration, phone and organization plugins, reviewed Drizzle schema/migrations, and server-side membership policy helpers. Authentication routes stay disabled until a real compliant phone verification delivery path and its abuse protections are configured and reviewed. Website sign-in, business onboarding, invitations, recovery UX, and WhatsApp onboarding are later phases.
 
 ## Requirements
 
@@ -46,7 +46,17 @@ pnpm format
 
 ## Environment
 
-The API reads `HOST` and `PORT` from the process environment. `.env.example` lists the current defaults; no credentials or external services are needed for the scaffold.
+The API reads `HOST` and `PORT` from the process environment. `.env.example` lists blank database and secret placeholders. Keep `AUTH_ENABLED=false` until authentication provider configuration and security controls have been reviewed; the configured phone OTP callback intentionally fails closed without a delivery provider. Never use real customer data in local development.
+
+Database commands (run after supplying a development-only `DATABASE_URL`):
+
+```sh
+pnpm --filter @mizvo/database db:auth-schema
+pnpm --filter @mizvo/database db:generate
+pnpm --filter @mizvo/database db:migrate
+```
+
+The auth schema command uses Better Auth's pinned CLI to regenerate the tables from the server plugin configuration. Review generated output before migration. The committed migrations include Mizvo's single-role membership and last-owner constraints.
 
 ## Workspace layout
 

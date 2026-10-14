@@ -10,8 +10,12 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@better-auth/drizzle-adapter": "1.7.7",
+    "@mizvo/database": "workspace:*",
     "@mizvo/shared-schemas": "workspace:*",
     "@mizvo/shared-types": "workspace:*",
+    "better-auth": "1.7.7",
+    "drizzle-orm": "0.45.4",
     "fastify": "5.12.5"
   },
   "devDependencies": {
