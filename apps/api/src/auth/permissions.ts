@@ -51,5 +51,5 @@ export function hasBusinessPermission(role: string, permission: BusinessPermissi
 }
 
 export function isBusinessRole(role: string): role is BusinessRole {
-  return role in businessPermissions;
+  return Object.hasOwn(businessPermissions, role);
 }

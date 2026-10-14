@@ -2,7 +2,12 @@ import type { createDatabase } from "@mizvo/database";
 import { member } from "@mizvo/database/schema/auth";
 import { and, eq } from "drizzle-orm";
 import type { createAuth } from "./auth.js";
-import { type BusinessPermission, type BusinessRole, businessPermissions } from "./permissions.js";
+import {
+  type BusinessPermission,
+  type BusinessRole,
+  businessPermissions,
+  isBusinessRole,
+} from "./permissions.js";
 
 export interface OrganizationMembership {
   organizationId: string;
@@ -60,7 +65,7 @@ export function requireBusinessMembership(
     !membership ||
     membership.userId !== userId ||
     membership.organizationId !== requestedOrganizationId ||
-    !(membership.role in businessPermissions)
+    !isBusinessRole(membership.role)
   ) {
     throw new AuthorizationError();
   }

@@ -24,6 +24,16 @@ describe("business authorization policy", () => {
     );
   });
 
+  it("rejects unknown or inherited role names", () => {
+    expect(() =>
+      requireBusinessMembership(
+        { organizationId: "business-a", userId: "user-1", role: "toString" },
+        "user-1",
+        "business-a",
+      ),
+    ).toThrow(AuthorizationError);
+  });
+
   it("does not give staff owner permissions from another business", () => {
     const context = requireBusinessMembership(memberships[0] ?? null, "user-1", "business-a");
     expect(() => requireBusinessPermission(context, "members:manage")).toThrow(AuthorizationError);
