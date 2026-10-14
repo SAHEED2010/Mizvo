@@ -396,9 +396,15 @@ postgresSuite("authentication PostgreSQL invariants", () => {
     const cookieHeader = Array.isArray(cookie)
       ? cookie[0]?.split(";", 1)[0]
       : cookie?.split(";", 1)[0];
-    expect(cookie).toContain("HttpOnly");
-    expect(cookie).toContain("Secure");
-    expect(cookie).toContain("SameSite=Lax");
+    const cookies = Array.isArray(cookie) ? cookie : [cookie ?? ""];
+    expect(
+      cookies.some(
+        (value) =>
+          value.includes("HttpOnly") &&
+          value.includes("Secure") &&
+          value.includes("SameSite=Lax"),
+      ),
+    ).toBe(true);
     const signedOut = await app.inject({
       method: "POST",
       url: "/api/auth/sign-out",
