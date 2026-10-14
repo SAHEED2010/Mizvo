@@ -114,8 +114,8 @@ postgresSuite("authentication PostgreSQL invariants", () => {
         body: { userId: users[2], organizationId, role: "member" as "owner" },
       }),
     ).rejects.toThrow();
-    const [{ role }] = await client`SELECT "role" FROM "member" WHERE "user_id" = ${users[2]}`;
-    expect(role).toBeUndefined();
+    const uncreatedMember = await client`SELECT "role" FROM "member" WHERE "user_id" = ${users[2]}`;
+    expect(uncreatedMember).toHaveLength(0);
   });
 
   it("documents the current owner guard by rejecting organization cascade deletion", async () => {
