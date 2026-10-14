@@ -358,6 +358,40 @@ postgresSuite("authentication PostgreSQL invariants", () => {
     expect(ipAttempts.filter((value) => !value)).toHaveLength(1);
   });
 
+  it("resets a fixed OTP throttle window after expiry and removes stale buckets", async () => {
+    let timestamp = Date.now();
+    const rateLimiter = createPostgresOtpRateLimiter(
+      postgres(databaseUrl as string, { max: 2, prepare: false }),
+      { now: () => timestamp },
+    );
+
+    try {
+      const initialAttempts = await Promise.all(
+        Array.from({ length: 4 }, () =>
+          rateLimiter.consume("request", "+2348091234567", "192.0.2.50"),
+        ),
+      );
+      expect(initialAttempts.filter(Boolean)).toHaveLength(3);
+      expect(initialAttempts.filter((value) => !value)).toHaveLength(1);
+      expect(await rateLimiter.consume("request", "+2348101234567", "192.0.2.51")).toBe(true);
+
+      timestamp += 14 * 60 * 1000;
+      expect(await rateLimiter.consume("request", "+2348091234567", "192.0.2.50")).toBe(false);
+
+      timestamp += 60 * 1000;
+      expect(await rateLimiter.consume("request", "+2348091234567", "192.0.2.50")).toBe(true);
+      const staleBuckets = await client<{ count: number }[]>`
+        SELECT count(*)::int AS count
+        FROM "rate_limit"
+        WHERE "key" LIKE 'mizvo:otp:%'
+          AND "last_request" <= ${timestamp - 15 * 60 * 1000}
+      `;
+      expect(staleBuckets[0]?.count).toBe(0);
+    } finally {
+      await rateLimiter.close();
+    }
+  });
+
   it("enforces trusted browser origins at Fastify and forwards protected cookies through the same-origin API", async () => {
     const environment = {
       AUTH_ENABLED: "true",

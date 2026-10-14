@@ -10,23 +10,49 @@ export interface OtpRateLimiter {
 }
 
 const WINDOW_MS = 15 * 60 * 1000;
+const CLEANUP_INTERVAL_MS = WINDOW_MS;
+
+interface OtpRateLimiterOptions {
+  now?: () => number;
+}
 
 function digest(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-export function createPostgresOtpRateLimiter(client: Sql): OtpRateLimiter {
+export function createPostgresOtpRateLimiter(
+  client: Sql,
+  options: OtpRateLimiterOptions = {},
+): OtpRateLimiter {
+  const now = options.now ?? Date.now;
+  let nextCleanupAt = 0;
+
+  async function cleanupExpiredBuckets(timestamp: number): Promise<void> {
+    if (timestamp < nextCleanupAt) return;
+    await client`
+      DELETE FROM "rate_limit"
+      WHERE "key" LIKE 'mizvo:otp:%'
+        AND "last_request" <= ${timestamp - WINDOW_MS}
+    `;
+    nextCleanupAt = timestamp + CLEANUP_INTERVAL_MS;
+  }
+
   async function increment(key: string): Promise<number> {
-    const now = Date.now();
+    const timestamp = now();
+    await cleanupExpiredBuckets(timestamp);
     const [{ count }] = await client<{ count: number }[]>`
       INSERT INTO "rate_limit" ("id", "key", "count", "last_request")
-      VALUES (${randomUUID()}, ${key}, 1, ${now})
+      VALUES (${randomUUID()}, ${key}, 1, ${timestamp})
       ON CONFLICT ("key") DO UPDATE SET
         "count" = CASE
-          WHEN "rate_limit"."last_request" <= ${now - WINDOW_MS} THEN 1
+          WHEN "rate_limit"."last_request" <= ${timestamp - WINDOW_MS} THEN 1
           ELSE "rate_limit"."count" + 1
         END,
-        "last_request" = ${now}
+        -- Keep last_request as the fixed-window start until the next window begins.
+        "last_request" = CASE
+          WHEN "rate_limit"."last_request" <= ${timestamp - WINDOW_MS} THEN ${timestamp}
+          ELSE "rate_limit"."last_request"
+        END
       RETURNING "count"
     `;
     return count ?? Number.POSITIVE_INFINITY;
