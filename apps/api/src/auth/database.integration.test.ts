@@ -400,9 +400,7 @@ postgresSuite("authentication PostgreSQL invariants", () => {
     expect(
       cookies.some(
         (value) =>
-          value.includes("HttpOnly") &&
-          value.includes("Secure") &&
-          value.includes("SameSite=Lax"),
+          value.includes("HttpOnly") && value.includes("Secure") && value.includes("SameSite=Lax"),
       ),
     ).toBe(true);
     const signedOut = await app.inject({
