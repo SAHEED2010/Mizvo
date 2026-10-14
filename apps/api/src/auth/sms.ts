@@ -55,10 +55,16 @@ type AfricaTalkingClient = {
 };
 
 const require = createRequire(import.meta.url);
-const loadAfricaTalking = require("africastalking") as (options: {
-  username: string;
-  apiKey: string;
-}) => AfricaTalkingClient;
+
+// The SDK is optional: do not load it until the Africa's Talking transport
+// is actually used. Disabled OTP delivery must work without this package.
+function loadAfricaTalking(options: { username: string; apiKey: string }): AfricaTalkingClient {
+  const factory = require("africastalking") as (configuration: {
+    username: string;
+    apiKey: string;
+  }) => AfricaTalkingClient;
+  return factory(options);
+}
 
 export function createAfricaTalkingSmsTransport(
   env: NodeJS.ProcessEnv = process.env,
