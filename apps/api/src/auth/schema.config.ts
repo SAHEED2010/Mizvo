@@ -5,5 +5,6 @@ import { createAuthPlugins } from "./plugins.js";
 // same plugins used by the Fastify server. No database connection is opened.
 export const auth = betterAuth({
   baseURL: "http://127.0.0.1:4000",
+  rateLimit: { storage: "database" },
   plugins: [...createAuthPlugins()],
 });

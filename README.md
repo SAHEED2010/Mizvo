@@ -15,7 +15,7 @@ Mizvo is a WhatsApp-first financial intelligence and growth application for Nige
 
 ## Repository status
 
-The first application scaffold contains a Next.js web app and a Fastify API in a pnpm TypeScript monorepo. The API exposes a public health check. Phase A of authentication adds the Better Auth server configuration, phone and organization plugins, reviewed Drizzle schema/migrations, and server-side membership policy helpers. Authentication routes stay disabled until a real compliant phone verification delivery path and its abuse protections are configured and reviewed. Website sign-in, business onboarding, invitations, recovery UX, and WhatsApp onboarding are later phases.
+The pnpm TypeScript monorepo contains a Next.js website and Fastify API. Phase A added Better Auth, Drizzle/Neon schema and business authorization foundations. Phase B adds website phone OTP sign-in and a provider adapter behind Better Auth; authentication remains disabled until the deployment is configured and reviewed. Business setup, recovery enrollment, invitations, financial data, AI and WhatsApp onboarding are future phases.
 
 ## Requirements
 
@@ -42,11 +42,11 @@ pnpm lint
 pnpm format
 ```
 
-`pnpm test` builds workspace dependencies and runs the API health-check smoke test. `pnpm format` applies Biome formatting; `pnpm lint` checks formatting and lint rules without changing files.
+`pnpm test` builds workspace dependencies and runs API tests, including the PostgreSQL suite when `DATABASE_URL` points to the isolated local `mizvo_test` database. `pnpm format` applies Biome formatting; `pnpm lint` checks formatting and lint rules without changing files.
 
 ## Environment
 
-The API reads `HOST` and `PORT` from the process environment. `.env.example` lists blank database and secret placeholders. Keep `AUTH_ENABLED=false` until authentication provider configuration and security controls have been reviewed; the configured phone OTP callback intentionally fails closed without a delivery provider. Never use real customer data in local development.
+The API reads `HOST` and `PORT` from the process environment. `.env.example` lists blank, server-only provider placeholders. See [phone authentication setup](docs/AUTHENTICATION.md) before enabling auth. Africa's Talking is **not production ready** until account eligibility, Nigerian sender ID approval, pricing and delivery terms, and working credentials have been confirmed. Never use real customer data in local development.
 
 Database commands (run after supplying a development-only `DATABASE_URL`):
 
@@ -78,4 +78,4 @@ The auth schema command uses Better Auth's pinned CLI to regenerate the tables f
 - [Build plan](docs/BUILD_PLAN.md)
 - [Architecture decisions](docs/decisions/README.md)
 
-Accepted: [ADR-001](docs/decisions/001-multi-business-identity-and-access.md) (multi-business access) and [ADR-002](docs/decisions/002-authentication-whatsapp-onboarding-and-recovery.md) (Better Auth, phone-first registration, invitations and recovery). Authentication features are **not yet implemented**. The detailed financial model, APIs, jobs, files and deployment details remain pending.
+Accepted: [ADR-001](docs/decisions/001-multi-business-identity-and-access.md) (multi-business access) and [ADR-002](docs/decisions/002-authentication-whatsapp-onboarding-and-recovery.md) (Better Auth, phone-first registration, invitations and recovery). [ADR-004](docs/decisions/004-phone-otp-sms-delivery.md) remains proposed pending explicit team approval; its provider-neutral SMS adapter and Africa's Talking candidate do not approve production activation. Phase B provides website OTP sign-in when a provider is configured. Business onboarding, recovery, step-up, WhatsApp, the financial model, jobs and file workflows remain pending.

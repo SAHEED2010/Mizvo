@@ -9,7 +9,12 @@ try {
   const pgCoreImport = generated.match(/^import \{([^}]+)\} from "drizzle-orm\/pg-core";$/m);
   if (!pgCoreImport) throw new Error("Could not find the generated drizzle-orm/pg-core import");
 
-  const pgCoreNames = new Set(pgCoreImport[1].split(",").map((name) => name.trim()));
+  const pgCoreNames = new Set(
+    pgCoreImport[1]
+      .split(",")
+      .map((name) => name.trim())
+      .filter(Boolean),
+  );
   pgCoreNames.add("check");
   pgCoreNames.add("uniqueIndex");
   generated = generated.replace(

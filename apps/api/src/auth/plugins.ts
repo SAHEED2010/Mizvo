@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { organization, phoneNumber } from "better-auth/plugins";
 import { businessAccess, businessRoles } from "./permissions.js";
+import type { SmsTransport } from "./sms.js";
+import {
+  createAfricaTalkingSmsTransport,
+  normalizeNigerianPhoneNumber,
+  SmsDeliveryError,
+} from "./sms.js";
 
 const allowedBusinessRoles = new Set(["owner", "manager", "staff", "viewer"]);
 
@@ -10,18 +16,29 @@ function assertBusinessRole(role: string | string[]) {
   }
 }
 
-export function createAuthPlugins() {
+export function createAuthPlugins(smsTransport: SmsTransport = createAfricaTalkingSmsTransport()) {
   return [
     phoneNumber({
       expiresIn: 300,
       allowedAttempts: 3,
       requireVerification: true,
+      phoneNumberValidator: (value) => normalizeNigerianPhoneNumber(value) === value,
       signUpOnVerification: {
         getTempEmail: () => `phone-${randomUUID()}@users.invalid`,
         getTempName: () => "Mizvo user",
       },
-      async sendOTP() {
-        throw new Error("Phone verification delivery is not configured");
+      async sendOTP({ phoneNumber, code }, ctx) {
+        try {
+          await smsTransport.sendVerificationCode(phoneNumber, code);
+        } catch (error) {
+          const category = error instanceof SmsDeliveryError ? error.category : "unavailable";
+          ctx?.context.logger.error("Phone OTP delivery failed", { category });
+          // Do not let provider errors, recipient data, or OTP content reach API responses.
+          throw new SmsDeliveryError(category);
+        }
+      },
+      async sendPasswordResetOTP() {
+        throw new SmsDeliveryError("unconfigured");
       },
     }),
     organization({
