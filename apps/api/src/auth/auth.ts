@@ -30,6 +30,7 @@ export function createAuth(
     database: drizzleAdapter(database.db, {
       provider: "pg",
       schema,
+      transaction: true,
     }),
     emailAndPassword: { enabled: false },
     user: { changeEmail: { enabled: false } },

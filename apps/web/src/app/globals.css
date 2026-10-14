@@ -24,7 +24,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 button {
@@ -229,6 +230,40 @@ input::placeholder {
 input:focus {
   border-color: var(--green);
   box-shadow: 0 0 0 3px rgba(29, 96, 72, 0.12);
+}
+.business-list {
+  margin: 0 0 22px;
+  padding: 15px;
+  border: 1px solid #e8ece6;
+  border-radius: 10px;
+  background: #fbfcfa;
+}
+.business-list h3 {
+  margin: 0 0 12px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.business-picker {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+.business-picker span {
+  color: var(--muted);
+  font-size: 11px;
+}
+select {
+  width: 100%;
+  min-height: 46px;
+  padding: 0 12px;
+  border: 1px solid #ccd5cc;
+  border-radius: 9px;
+  background: #fff;
+  color: var(--ink);
+}
+select:focus-visible {
+  outline: 3px solid rgba(29, 96, 72, 0.18);
+  border-color: var(--green);
 }
 .code-input {
   max-width: 100%;

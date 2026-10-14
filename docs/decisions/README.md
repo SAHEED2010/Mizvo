@@ -10,6 +10,7 @@ ADRs track binding decisions and their rationale. Proposed documents are not bin
 - ADR-003: Financial data semantics, numeric precision, inventory costing and corrections.
 - Later: messaging, workflows, reports, storage, hosting and API contracts.
 - [ADR-004: Website phone OTP delivery boundary](004-phone-otp-sms-delivery.md) — **Proposed, 2026-10-14**. Recommends a provider-neutral SMS adapter with Africa's Talking as the Phase B candidate; pending explicit team approval.
+- [ADR-005: Verified business creation and active business context](005-business-onboarding-and-active-business.md) — **Proposed for Phase C1, 2026-10-14**. Server-only Organization operations, atomic verified-owner bootstrap, and membership revalidation for active business reads.
 
 ## Process
 1. Copy `000-template.md` to a numbered file.
