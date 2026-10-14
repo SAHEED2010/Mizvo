@@ -15,7 +15,6 @@
     "@mizvo/database": "workspace:*",
     "@mizvo/shared-schemas": "workspace:*",
     "@mizvo/shared-types": "workspace:*",
-    "africastalking": "0.8.4",
     "better-auth": "1.7.7",
     "drizzle-orm": "0.45.4",
     "fastify": "5.12.5",
@@ -26,5 +25,8 @@
     "postgres": "3.4.9",
     "tsx": "^4.20.6",
     "vitest": "^3.2.4"
+  },
+  "optionalDependencies": {
+    "africastalking": "0.8.4"
   }
 }

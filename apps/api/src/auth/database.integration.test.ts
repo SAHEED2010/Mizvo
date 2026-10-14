@@ -236,6 +236,41 @@ postgresSuite("authentication PostgreSQL invariants", () => {
     expect(duplicates[0]?.count).toBe(1);
   });
 
+  it("cannot send or verify a new account OTP when delivery provider selection is omitted", async () => {
+    const database = createDatabase(databaseUrl as string);
+    authDatabases.push(database);
+    const auth = createAuth(
+      {
+        DATABASE_URL: databaseUrl,
+        BETTER_AUTH_SECRET: "integration-test-secret-with-at-least-32-chars",
+        BETTER_AUTH_URL: "https://auth.mizvo.test",
+        BETTER_AUTH_TRUSTED_ORIGINS: "https://app.mizvo.test",
+        NODE_ENV: "production",
+      },
+      { database },
+    );
+
+    const send = await authRequest(auth, "/phone-number/send-otp", {
+      phoneNumber: "+2348031234567",
+    });
+    expect(send.status).toBeGreaterThanOrEqual(400);
+    const publicError = await send.text();
+    expect(publicError).not.toMatch(/\b\d{6}\b/);
+
+    const storedVerification =
+      await client`SELECT "value" FROM "verification" WHERE "identifier" = '+2348031234567'`;
+    const storedCode = storedVerification[0]?.value.match(/^(\d{6}):/)?.[1];
+    const rejectedCode = storedCode === "000000" ? "000001" : "000000";
+
+    const verify = await authRequest(auth, "/phone-number/verify", {
+      phoneNumber: "+2348031234567",
+      code: rejectedCode,
+    });
+    expect(verify.status).toBeGreaterThanOrEqual(400);
+    const created = await client`SELECT "id" FROM "user" WHERE "phone_number" = '+2348031234567'`;
+    expect(created).toHaveLength(0);
+  });
+
   it("rejects invalid, expired, wrong, exhausted, replayed, and concurrent phone codes", async () => {
     const auth = createTestAuth();
     const phoneNumber = "+2348031234567";
