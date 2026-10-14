@@ -7,15 +7,21 @@
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:postgres": "node -e \"if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required for PostgreSQL tests')\" && vitest run src/auth/database.integration.test.ts"
   },
   "dependencies": {
+    "@better-auth/drizzle-adapter": "1.7.7",
+    "@mizvo/database": "workspace:*",
     "@mizvo/shared-schemas": "workspace:*",
     "@mizvo/shared-types": "workspace:*",
+    "better-auth": "1.7.7",
+    "drizzle-orm": "0.45.4",
     "fastify": "5.12.5"
   },
   "devDependencies": {
     "@types/node": "^24.10.0",
+    "postgres": "3.4.9",
     "tsx": "^4.20.6",
     "vitest": "^3.2.4"
   }
