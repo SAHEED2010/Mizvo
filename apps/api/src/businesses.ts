@@ -3,7 +3,7 @@ import { runWithTransaction } from "@better-auth/core/context";
 import type { createDatabase } from "@mizvo/database";
 import { member, organization } from "@mizvo/database/schema/auth";
 import { fromNodeHeaders } from "better-auth/node";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { createAuth } from "./auth/auth.js";
 import { AuthorizationError, loadBusinessAccessContext } from "./auth/authorization.js";
@@ -157,13 +157,14 @@ export function registerBusinessRoutes(
 
     const name = readBusinessName(request.body);
     if (!name) return reply.status(400).send({ error: "invalid_business_name" });
+    const slug = organizationSlug(name, session.user.id);
 
     try {
       const context = await auth.$context;
       const created = await runWithTransaction(context.adapter, async () => {
         const organizationResult = await auth.api.createOrganization({
           headers: headersFor(request),
-          body: { name, slug: organizationSlug(name, session.user.id) },
+          body: { name, slug },
         });
         const createdMembers = organizationResult.members ?? [];
         const owners = createdMembers.filter(
@@ -187,7 +188,13 @@ export function registerBusinessRoutes(
         activeBusinessId: created.id,
       });
     } catch (error) {
-      if (hasPostgresCode(error, "23505")) {
+      const existingBusiness = await database.db
+        .select({ id: organization.id })
+        .from(organization)
+        .innerJoin(member, eq(member.organizationId, organization.id))
+        .where(and(eq(organization.slug, slug), eq(member.userId, session.user.id)))
+        .limit(1);
+      if (hasPostgresCode(error, "23505") || existingBusiness.length > 0) {
         return reply.status(409).send({ error: "business_already_exists" });
       }
       throw error;
