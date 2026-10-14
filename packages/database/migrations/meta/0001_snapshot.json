@@ -261,8 +261,7 @@
           "name": "role",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "default": "'member'"
+          "notNull": true
         },
         "created_at": {
           "name": "created_at",

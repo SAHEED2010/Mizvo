@@ -10,6 +10,7 @@
     "build": "pnpm --recursive --if-present build",
     "typecheck": "pnpm --recursive --if-present typecheck",
     "test": "pnpm --recursive --if-present build && pnpm --recursive --if-present test",
+    "test:postgres": "pnpm --filter @mizvo/database build && pnpm --filter @mizvo/api test:postgres",
     "lint": "biome check .",
     "format": "biome format --write .",
     "format:check": "biome format ."
