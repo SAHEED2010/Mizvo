@@ -2,11 +2,7 @@ import { randomUUID } from "node:crypto";
 import { organization, phoneNumber } from "better-auth/plugins";
 import { businessAccess, businessRoles } from "./permissions.js";
 import type { SmsTransport } from "./sms.js";
-import {
-  createAfricaTalkingSmsTransport,
-  normalizeNigerianPhoneNumber,
-  SmsDeliveryError,
-} from "./sms.js";
+import { normalizeNigerianPhoneNumber, SmsDeliveryError } from "./sms.js";
 
 const allowedBusinessRoles = new Set(["owner", "manager", "staff", "viewer"]);
 
@@ -16,7 +12,7 @@ function assertBusinessRole(role: string | string[]) {
   }
 }
 
-export function createAuthPlugins(smsTransport: SmsTransport = createAfricaTalkingSmsTransport()) {
+export function createAuthPlugins(smsTransport: SmsTransport) {
   return [
     phoneNumber({
       expiresIn: 300,

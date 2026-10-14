@@ -5,7 +5,7 @@ import { betterAuth } from "better-auth";
 import { eq } from "drizzle-orm";
 import { createAuthPlugins } from "./plugins.js";
 import type { SmsTransport } from "./sms.js";
-import { createAfricaTalkingSmsTransport } from "./sms.js";
+import { createOtpSmsTransport } from "./sms-provider.js";
 
 export function createAuth(
   env: NodeJS.ProcessEnv = process.env,
@@ -75,7 +75,7 @@ export function createAuth(
         },
       },
     },
-    plugins: [...createAuthPlugins(options.smsTransport ?? createAfricaTalkingSmsTransport(env))],
+    plugins: [...createAuthPlugins(options.smsTransport ?? createOtpSmsTransport(env))],
     trustedOrigins: (env.BETTER_AUTH_TRUSTED_ORIGINS ?? "")
       .split(",")
       .map((origin) => origin.trim())
