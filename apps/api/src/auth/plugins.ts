@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { passkey } from "@better-auth/passkey";
 import type { BetterAuthPlugin } from "better-auth";
 import { organization, phoneNumber } from "better-auth/plugins";
 import { businessAccess, businessRoles } from "./permissions.js";
@@ -54,6 +55,23 @@ function assertBusinessRole(role: string | string[]) {
   }
 }
 
+export function requireVerifiedPasskeyEnrollment(input: {
+  userVerified: boolean;
+  sessionUserId: string | undefined;
+  targetUserId: string;
+  phoneNumberVerified: boolean;
+}): string {
+  if (
+    input.userVerified !== true ||
+    !input.sessionUserId ||
+    input.sessionUserId !== input.targetUserId ||
+    input.phoneNumberVerified !== true
+  ) {
+    throw new Error("Passkey registration requires the verified current account");
+  }
+  return input.sessionUserId;
+}
+
 export function createAuthPlugins(smsTransport: SmsTransport) {
   return [
     phoneInvitationDataSchema,
@@ -78,6 +96,29 @@ export function createAuthPlugins(smsTransport: SmsTransport) {
       },
       async sendPasswordResetOTP() {
         throw new SmsDeliveryError("unconfigured");
+      },
+    }),
+    passkey({
+      rpID: "localhost",
+      rpName: "Mizvo Local Development",
+      origin: "http://localhost:3000",
+      authenticatorSelection: { userVerification: "required" },
+      registration: {
+        requireSession: true,
+        async afterVerification({ ctx, verification, user }) {
+          // The plugin currently asks SimpleWebAuthn to verify registration
+          // with requireUserVerification=false. Enforce the verified result
+          // here, after cryptographic verification and before persistence.
+          const sessionUser = ctx.context.session?.user;
+          const userId = requireVerifiedPasskeyEnrollment({
+            userVerified: verification.registrationInfo?.userVerified === true,
+            sessionUserId: sessionUser?.id,
+            targetUserId: user.id,
+            phoneNumberVerified: sessionUser?.phoneNumberVerified === true,
+          });
+          // Explicitly preserve the currently authenticated Better Auth ID.
+          return { userId };
+        },
       },
     }),
     organization({

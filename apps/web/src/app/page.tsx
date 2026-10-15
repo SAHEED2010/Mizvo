@@ -1,9 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 type AuthenticatedUser = { name?: string; phoneNumber?: string };
 type Business = { id: string; name: string; role: string };
+type PasskeyRecord = { id: string; name: string | null; createdAt: string | null };
+
+const localPasskeyBuildEnabled =
+  process.env.NODE_ENV === "development" &&
+  process.env.NEXT_PUBLIC_MIZVO_PASSKEY_ENROLLMENT === "development";
 
 function normalizePhone(value: string): string | null {
   const input = value.trim().replace(/[\s()-]/g, "");
@@ -31,6 +36,27 @@ export default function Home() {
   const [businessName, setBusinessName] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [passkeys, setPasskeys] = useState<PasskeyRecord[]>([]);
+  const [passkeyBusy, setPasskeyBusy] = useState(false);
+  const [showLocalPasskeys, setShowLocalPasskeys] = useState(false);
+
+  const loadPasskeys = useCallback(async () => {
+    try {
+      const response = await fetch("/api/security/passkeys", { credentials: "same-origin" });
+      const data = await readResponse(response);
+      if (!response.ok) throw new Error("passkey-list");
+      setPasskeys((data.passkeys as PasskeyRecord[] | undefined) ?? []);
+    } catch {
+      setPasskeys([]);
+      setMessage("Passkey status is temporarily unavailable.");
+    }
+  }, []);
+
+  useEffect(() => {
+    setShowLocalPasskeys(
+      localPasskeyBuildEnabled && window.location.origin === "http://localhost:3000",
+    );
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -67,6 +93,10 @@ export default function Home() {
     };
   }, []);
 
+  useEffect(() => {
+    if (showLocalPasskeys && step === "signed-in") void loadPasskeys();
+  }, [showLocalPasskeys, step, loadPasskeys]);
+
   async function loadBusinesses() {
     try {
       const response = await fetch("/api/businesses", { credentials: "same-origin" });
@@ -76,6 +106,30 @@ export default function Home() {
       setActiveBusinessId((data.activeBusinessId as string | null | undefined) ?? null);
     } catch {
       setMessage("We couldn’t load your businesses. Please try again.");
+    }
+  }
+
+  async function enrollLocalPasskey() {
+    if (!showLocalPasskeys || passkeyBusy) return;
+    setPasskeyBusy(true);
+    setMessage("");
+    try {
+      const [{ createAuthClient }, { passkeyClient }] = await Promise.all([
+        import("better-auth/react"),
+        import("@better-auth/passkey/client"),
+      ]);
+      const client = createAuthClient({
+        baseURL: window.location.origin,
+        plugins: [passkeyClient()],
+      });
+      const { error } = await client.passkey.addPasskey({ name: "Mizvo local test passkey" });
+      if (error) throw new Error("passkey-enrollment");
+      await loadPasskeys();
+      setMessage("Development passkey enrolled for this verified account.");
+    } catch {
+      setMessage("Passkey setup was cancelled or is unavailable in this browser.");
+    } finally {
+      setPasskeyBusy(false);
     }
   }
 
@@ -177,6 +231,7 @@ export default function Home() {
       setCode("");
       setMessage("Your phone is verified and you’re signed in.");
       await loadBusinesses();
+      if (showLocalPasskeys) await loadPasskeys();
     } catch {
       setMessage("That code couldn’t be verified. Check it or request a new code.");
     } finally {
@@ -298,6 +353,37 @@ export default function Home() {
                   security are set up.
                 </p>
               </section>
+              {showLocalPasskeys ? (
+                <section className="business-list" aria-labelledby="development-passkeys-title">
+                  <h3 id="development-passkeys-title">Local development passkeys</h3>
+                  <p className="field-hint">
+                    Test-only enrollment for this verified account. These credentials cannot sign in
+                    or authorize owner actions.
+                  </p>
+                  {passkeys.length > 0 ? (
+                    <ul>
+                      {passkeys.map((item) => (
+                        <li key={item.id}>
+                          {item.name ?? "Unnamed passkey"}
+                          {item.createdAt
+                            ? ` · ${new Date(item.createdAt).toLocaleDateString()}`
+                            : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="field-hint">No local passkeys enrolled.</p>
+                  )}
+                  <button
+                    className="button button-secondary"
+                    disabled={busy || passkeyBusy}
+                    onClick={() => void enrollLocalPasskey()}
+                    type="button"
+                  >
+                    {passkeyBusy ? "Waiting for authenticator…" : "Add a local test passkey"}
+                  </button>
+                </section>
+              ) : null}
               <p className="field-hint">
                 You’ll be the owner. Other membership changes will be available after additional
                 security setup.
