@@ -627,7 +627,7 @@ postgresSuite("authentication PostgreSQL invariants", () => {
       )
         .filter((value): value is string => Boolean(value))
         .map((value) => value.split(";", 1)[0])
-        .find((value) => value?.startsWith("better-auth-passkey="));
+        .find((value) => value?.startsWith("better-auth.better-auth-passkey="));
       expect(challengeCookie).toBeDefined();
 
       const wrongUser = await app.inject({
@@ -655,7 +655,7 @@ postgresSuite("authentication PostgreSQL invariants", () => {
       const freshChallengeCookie = (Array.isArray(freshCookies) ? freshCookies : [freshCookies])
         .filter((value): value is string => Boolean(value))
         .map((value) => value.split(";", 1)[0])
-        .find((value) => value?.startsWith("better-auth-passkey="));
+        .find((value) => value?.startsWith("better-auth.better-auth-passkey="));
       const wrongOrigin = await app.inject({
         method: "POST",
         url: "/api/auth/passkey/verify-registration",
@@ -687,7 +687,7 @@ postgresSuite("authentication PostgreSQL invariants", () => {
       )
         .filter((value): value is string => Boolean(value))
         .map((value) => value.split(";", 1)[0])
-        .find((value) => value?.startsWith("better-auth-passkey="));
+        .find((value) => value?.startsWith("better-auth.better-auth-passkey="));
       const invalidSignature = await app.inject({
         method: "POST",
         url: "/api/auth/passkey/verify-registration",
