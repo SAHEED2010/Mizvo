@@ -11,6 +11,7 @@ ADRs track binding decisions and their rationale. Proposed documents are not bin
 - Later: messaging, workflows, reports, storage, hosting and API contracts.
 - [ADR-004: Website phone OTP delivery boundary](004-phone-otp-sms-delivery.md) — **Proposed, 2026-10-14**. Recommends a provider-neutral SMS adapter with Africa's Talking as the Phase B candidate; pending explicit team approval.
 - [ADR-005: Verified business creation and active business context](005-business-onboarding-and-active-business.md) — **Proposed for Phase C1, 2026-10-14**. Server-only Organization operations, atomic verified-owner bootstrap, and membership revalidation for active business reads.
+- [ADR-006: Passkeys, independent owner recovery and recent step-up](006-passkeys-recovery-and-step-up.md) — **Proposed for Phase C3, 2026-10-15**. Phone-first passkey enrollment, emergency recovery and session-bound ten-minute owner step-up; production domain and recovery threat-model gates remain open.
 - [ADR-007: Guarded phone-only business invitations](007-phone-only-business-invitations.md) — **Proposed for Phase C2, 2026-10-15**. Separate hashed phone-invitation lifecycle, Better Auth membership authority, audit trail, and default-deny C3 security gate.
 
 ## Process
