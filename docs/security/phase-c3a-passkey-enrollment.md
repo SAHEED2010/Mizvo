@@ -23,6 +23,11 @@ origin. Both variables are opt-in and absent from the environment example.
 Production Fastify requests return 404 for all plugin passkey paths even if the
 development feature flag is mistakenly set.
 
+These development flags are not a public deployment mode. Keep the API bound
+to loopback for local testing, and never set both flags on a publicly reachable
+development instance; the exact localhost browser origin is not a substitute
+for a network boundary.
+
 ## Plugin route audit and allowlist
 
 The pinned `@better-auth/passkey@1.7.7` dependency has the same peer version as

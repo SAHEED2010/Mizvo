@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { createDatabase } from "@mizvo/database";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -16,6 +17,131 @@ import {
 } from "./phone-invitations.js";
 import { requireVerifiedPasskeyEnrollment } from "./plugins.js";
 import type { SmsTransport } from "./sms.js";
+
+type RegistrationResponse = {
+  id: string;
+  rawId: string;
+  type: "public-key";
+  response: {
+    clientDataJSON: string;
+    attestationObject: string;
+    transports: string[];
+  };
+  clientExtensionResults: Record<string, unknown>;
+  authenticatorAttachment: string | null;
+};
+
+function readCborHeader(bytes: Buffer, offset: number) {
+  const first = bytes[offset];
+  if (first === undefined) throw new Error("Unexpected end of CBOR data");
+  const majorType = first >> 5;
+  const additional = first & 31;
+  if (additional < 24) return { majorType, length: additional, nextOffset: offset + 1 };
+  if (additional === 24) {
+    const length = bytes.readUInt8(offset + 1);
+    return { majorType, length, nextOffset: offset + 2 };
+  }
+  if (additional === 25) {
+    const length = bytes.readUInt16BE(offset + 1);
+    return { majorType, length, nextOffset: offset + 3 };
+  }
+  if (additional === 26) {
+    const length = bytes.readUInt32BE(offset + 1);
+    return { majorType, length, nextOffset: offset + 5 };
+  }
+  if (additional === 27) {
+    const length = Number(bytes.readBigUInt64BE(offset + 1));
+    if (!Number.isSafeInteger(length)) throw new Error("Unsupported CBOR integer length");
+    return { majorType, length, nextOffset: offset + 9 };
+  }
+  throw new Error("Indefinite-length CBOR is not expected in WebAuthn attestation");
+}
+
+function skipCborValue(bytes: Buffer, offset: number): number {
+  const header = readCborHeader(bytes, offset);
+  if (header.majorType === 0 || header.majorType === 1 || header.majorType === 7) {
+    return header.nextOffset;
+  }
+  if (header.majorType === 2 || header.majorType === 3) return header.nextOffset + header.length;
+  if (header.majorType === 4) {
+    let nextOffset = header.nextOffset;
+    for (let index = 0; index < header.length; index++) {
+      nextOffset = skipCborValue(bytes, nextOffset);
+    }
+    return nextOffset;
+  }
+  if (header.majorType === 5) {
+    let nextOffset = header.nextOffset;
+    for (let index = 0; index < header.length * 2; index++) {
+      nextOffset = skipCborValue(bytes, nextOffset);
+    }
+    return nextOffset;
+  }
+  if (header.majorType === 6) return skipCborValue(bytes, header.nextOffset);
+  throw new Error("Unsupported CBOR value in WebAuthn attestation");
+}
+
+function getAttestedAuthenticatorDataOffset(bytes: Buffer): number {
+  const map = readCborHeader(bytes, 0);
+  if (map.majorType !== 5) throw new Error("WebAuthn attestation object must be a CBOR map");
+  let offset = map.nextOffset;
+  for (let index = 0; index < map.length; index++) {
+    const key = readCborHeader(bytes, offset);
+    if (key.majorType !== 3) throw new Error("WebAuthn attestation keys must be CBOR text");
+    const keyEnd = key.nextOffset + key.length;
+    const name = bytes.toString("utf8", key.nextOffset, keyEnd);
+    offset = keyEnd;
+    if (name === "authData") {
+      const value = readCborHeader(bytes, offset);
+      if (value.majorType !== 2 || value.length < 37) {
+        throw new Error("WebAuthn attestation authData must be a byte string");
+      }
+      return value.nextOffset;
+    }
+    offset = skipCborValue(bytes, offset);
+  }
+  throw new Error("WebAuthn attestation is missing authData");
+}
+
+function rewriteClientData(
+  response: RegistrationResponse,
+  mutate: (clientData: Record<string, unknown>) => void,
+): RegistrationResponse {
+  const changed = structuredClone(response);
+  const clientData = JSON.parse(
+    Buffer.from(changed.response.clientDataJSON, "base64url").toString("utf8"),
+  ) as Record<string, unknown>;
+  mutate(clientData);
+  changed.response.clientDataJSON = Buffer.from(JSON.stringify(clientData)).toString("base64url");
+  return changed;
+}
+
+function clearWebAuthnUserVerification(response: RegistrationResponse): RegistrationResponse {
+  const changed = structuredClone(response);
+  const attestation = Buffer.from(changed.response.attestationObject, "base64url");
+  const authenticatorDataOffset = getAttestedAuthenticatorDataOffset(attestation);
+  const flagsOffset = authenticatorDataOffset + 32;
+  const flags = attestation.at(flagsOffset);
+  if (flags === undefined || (flags & 0x04) === 0) {
+    throw new Error("Virtual authenticator ceremony did not set the UV flag");
+  }
+  attestation[flagsOffset] = flags & ~0x04;
+  changed.response.attestationObject = attestation.toString("base64url");
+  return changed;
+}
+
+function changeWebAuthnRpIdHash(
+  response: RegistrationResponse,
+  rpId: string,
+): RegistrationResponse {
+  const changed = structuredClone(response);
+  const attestation = Buffer.from(changed.response.attestationObject, "base64url");
+  const authenticatorDataOffset = getAttestedAuthenticatorDataOffset(attestation);
+  const rpIdHash = createHash("sha256").update(rpId).digest();
+  rpIdHash.copy(attestation, authenticatorDataOffset);
+  changed.response.attestationObject = attestation.toString("base64url");
+  return changed;
+}
 
 const databaseUrl = process.env.DATABASE_URL;
 const postgresSuite = databaseUrl ? describe : describe.skip;
@@ -676,25 +802,25 @@ postgresSuite("authentication PostgreSQL invariants", () => {
       });
       expect(expiredChallenge.statusCode).toBeGreaterThanOrEqual(400);
 
-      const invalidSignatureOptions = await app.inject({
+      const malformedOptions = await app.inject({
         method: "GET",
         url: "/api/auth/passkey/generate-register-options",
         headers: { origin, cookie: first.cookie },
       });
-      const invalidSignatureHeaders = invalidSignatureOptions.headers["set-cookie"];
-      const invalidSignatureChallenge = (
-        Array.isArray(invalidSignatureHeaders) ? invalidSignatureHeaders : [invalidSignatureHeaders]
+      const malformedHeaders = malformedOptions.headers["set-cookie"];
+      const malformedChallenge = (
+        Array.isArray(malformedHeaders) ? malformedHeaders : [malformedHeaders]
       )
         .filter((value): value is string => Boolean(value))
         .map((value) => value.split(";", 1)[0])
         .find((value) => value?.startsWith("better-auth.better-auth-passkey="));
-      const invalidSignature = await app.inject({
+      const malformedResponse = await app.inject({
         method: "POST",
         url: "/api/auth/passkey/verify-registration",
-        headers: { origin, cookie: `${first.cookie}; ${invalidSignatureChallenge}` },
+        headers: { origin, cookie: `${first.cookie}; ${malformedChallenge}` },
         payload: { response: {} },
       });
-      expect(invalidSignature.statusCode).toBeGreaterThanOrEqual(400);
+      expect(malformedResponse.statusCode).toBeGreaterThanOrEqual(400);
       expect((await client`SELECT count(*)::int AS count FROM "passkey"`)[0]?.count).toBe(0);
 
       await client`UPDATE "user" SET "phone_number_verified" = false WHERE "id" = ${first.user.id}`;
@@ -706,6 +832,15 @@ postgresSuite("authentication PostgreSQL invariants", () => {
       expect(unverified.statusCode).toBe(403);
 
       await client`UPDATE "user" SET "phone_number_verified" = true WHERE "id" = ${first.user.id}`;
+      await client`UPDATE "session" SET "expires_at" = now() - interval '1 second' WHERE "user_id" = ${first.user.id}`;
+      const expiredSession = await app.inject({
+        method: "GET",
+        url: "/api/auth/passkey/generate-register-options",
+        headers: { origin, cookie: first.cookie },
+      });
+      expect(expiredSession.statusCode).toBe(401);
+
+      await client`UPDATE "session" SET "expires_at" = now() + interval '1 day' WHERE "user_id" = ${first.user.id}`;
       await client`DELETE FROM "session" WHERE "user_id" = ${first.user.id}`;
       const revoked = await app.inject({
         method: "GET",
@@ -732,7 +867,7 @@ postgresSuite("authentication PostgreSQL invariants", () => {
       const page = await context.newPage();
       const cdp = await context.newCDPSession(page);
       await cdp.send("WebAuthn.enable");
-      await cdp.send("WebAuthn.addVirtualAuthenticator", {
+      const { authenticatorId } = await cdp.send("WebAuthn.addVirtualAuthenticator", {
         options: {
           protocol: "ctap2",
           transport: "internal",
@@ -776,62 +911,124 @@ postgresSuite("authentication PostgreSQL invariants", () => {
         await client`SELECT count(*)::int AS count FROM "session" WHERE "user_id" = ${userId}`;
       expect(sessionsBefore[0]?.count).toBe(1);
 
-      const enrolled = await page.evaluate(async () => {
-        const optionsResponse = await fetch("/api/auth/passkey/generate-register-options");
-        if (!optionsResponse.ok) return { status: optionsResponse.status, body: "options failed" };
-        const options = await optionsResponse.json();
-        const fromBase64url = (value: string) => {
-          const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
-          const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
-          const binary = atob(padded);
-          return Uint8Array.from(binary, (character) => character.charCodeAt(0)).buffer;
-        };
-        const toBase64url = (value: ArrayBuffer) => {
-          const bytes = new Uint8Array(value);
-          let binary = "";
-          for (const byte of bytes) binary += String.fromCharCode(byte);
-          return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-        };
-        const publicKey = {
-          ...options,
-          challenge: fromBase64url(options.challenge),
-          user: { ...options.user, id: fromBase64url(options.user.id) },
-          excludeCredentials: (options.excludeCredentials ?? []).map(
-            (credential: {
-              id: string;
-              type: "public-key";
-              transports?: AuthenticatorTransport[];
-            }) => ({
-              ...credential,
-              id: fromBase64url(credential.id),
-            }),
-          ),
-        };
-        const credential = (await navigator.credentials.create({
-          publicKey,
-        })) as PublicKeyCredential | null;
-        if (!credential) return { status: 0, body: "authenticator returned no credential" };
-        const attestation = credential.response as AuthenticatorAttestationResponse;
-        const response = {
-          id: credential.id,
-          rawId: toBase64url(credential.rawId),
-          type: credential.type,
-          response: {
-            clientDataJSON: toBase64url(attestation.clientDataJSON),
-            attestationObject: toBase64url(attestation.attestationObject),
-            transports: attestation.getTransports?.() ?? [],
-          },
-          clientExtensionResults: credential.getClientExtensionResults(),
-          authenticatorAttachment: credential.authenticatorAttachment,
-        };
-        const verification = await fetch("/api/auth/passkey/verify-registration", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ response, name: "CI virtual authenticator" }),
+      const createRegistrationResponse = async () => {
+        await cdp.send("WebAuthn.clearCredentials", { authenticatorId });
+        return page.evaluate(async () => {
+          const optionsResponse = await fetch("/api/auth/passkey/generate-register-options");
+          if (!optionsResponse.ok)
+            throw new Error(`registration options failed: ${optionsResponse.status}`);
+          const options = await optionsResponse.json();
+          const fromBase64url = (value: string) => {
+            const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+            const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+            const binary = atob(padded);
+            return Uint8Array.from(binary, (character) => character.charCodeAt(0)).buffer;
+          };
+          const toBase64url = (value: ArrayBuffer) => {
+            const bytes = new Uint8Array(value);
+            let binary = "";
+            for (const byte of bytes) binary += String.fromCharCode(byte);
+            return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+          };
+          const publicKey = {
+            ...options,
+            challenge: fromBase64url(options.challenge),
+            user: { ...options.user, id: fromBase64url(options.user.id) },
+            excludeCredentials: (options.excludeCredentials ?? []).map(
+              (credential: {
+                id: string;
+                type: "public-key";
+                transports?: AuthenticatorTransport[];
+              }) => ({
+                ...credential,
+                id: fromBase64url(credential.id),
+              }),
+            ),
+          };
+          const credential = (await navigator.credentials.create({
+            publicKey,
+          })) as PublicKeyCredential | null;
+          if (!credential) throw new Error("virtual authenticator returned no credential");
+          const attestation = credential.response as AuthenticatorAttestationResponse;
+          return {
+            id: credential.id,
+            rawId: toBase64url(credential.rawId),
+            type: credential.type as "public-key",
+            response: {
+              clientDataJSON: toBase64url(attestation.clientDataJSON),
+              attestationObject: toBase64url(attestation.attestationObject),
+              transports: [...(attestation.getTransports?.() ?? [])],
+            },
+            clientExtensionResults: credential.getClientExtensionResults() as Record<
+              string,
+              unknown
+            >,
+            authenticatorAttachment: credential.authenticatorAttachment as string | null,
+          };
         });
-        return { status: verification.status, body: await verification.text() };
+      };
+      const currentCookieHeader = async () => {
+        const cookies = await context.cookies("http://localhost:3000");
+        const cookieHeader = cookies.map(({ name, value }) => `${name}=${value}`).join("; ");
+        expect(cookieHeader).toContain("better-auth.better-auth-passkey=");
+        return cookieHeader;
+      };
+      const submitRegistration = (response: RegistrationResponse, cookie: string) =>
+        app.inject({
+          method: "POST",
+          url: "/api/auth/passkey/verify-registration",
+          headers: { origin: "http://localhost:3000", cookie },
+          payload: { response, name: "CI virtual authenticator" },
+        });
+      const credentialResponse = await createRegistrationResponse();
+      const credentialChallengeCookies = await currentCookieHeader();
+      const enrolled = await submitRegistration(credentialResponse, credentialChallengeCookies);
+      expect(enrolled.statusCode, enrolled.body).toBe(200);
+
+      const replayed = await submitRegistration(credentialResponse, credentialChallengeCookies);
+      expect(replayed.statusCode).toBeGreaterThanOrEqual(400);
+      expect((await client`SELECT count(*)::int AS count FROM "passkey"`)[0]?.count).toBe(1);
+
+      const challengeMismatch = rewriteClientData(await createRegistrationResponse(), (data) => {
+        data.challenge = Buffer.from("attacker-selected-challenge").toString("base64url");
       });
-      expect(enrolled.status, enrolled.body).toBe(200);
+      const challengeMismatchResult = await submitRegistration(
+        challengeMismatch,
+        await currentCookieHeader(),
+      );
+      expect(challengeMismatchResult.statusCode).toBeGreaterThanOrEqual(400);
+      expect((await client`SELECT count(*)::int AS count FROM "passkey"`)[0]?.count).toBe(1);
+
+      const originMismatch = rewriteClientData(await createRegistrationResponse(), (data) => {
+        data.origin = "http://127.0.0.1:3000";
+      });
+      const originMismatchResult = await submitRegistration(
+        originMismatch,
+        await currentCookieHeader(),
+      );
+      expect(originMismatchResult.statusCode).toBeGreaterThanOrEqual(400);
+      expect((await client`SELECT count(*)::int AS count FROM "passkey"`)[0]?.count).toBe(1);
+
+      const rpIdMismatch = changeWebAuthnRpIdHash(
+        await createRegistrationResponse(),
+        "attacker.test",
+      );
+      const rpIdMismatchResult = await submitRegistration(
+        rpIdMismatch,
+        await currentCookieHeader(),
+      );
+      expect(rpIdMismatchResult.statusCode).toBeGreaterThanOrEqual(400);
+      expect((await client`SELECT count(*)::int AS count FROM "passkey"`)[0]?.count).toBe(1);
+
+      const missingUserVerification = clearWebAuthnUserVerification(
+        await createRegistrationResponse(),
+      );
+      const missingUserVerificationResult = await submitRegistration(
+        missingUserVerification,
+        await currentCookieHeader(),
+      );
+      expect(missingUserVerificationResult.statusCode).toBeGreaterThanOrEqual(400);
+      expect((await client`SELECT count(*)::int AS count FROM "passkey"`)[0]?.count).toBe(1);
 
       const userAfter =
         await client`SELECT "id", "phone_number", "phone_number_verified" FROM "user" WHERE "phone_number" = ${phoneNumber}`;
@@ -1584,5 +1781,5 @@ postgresSuite("authentication PostgreSQL invariants", () => {
       }
       await app.close();
     }
-  });
+  }, 30_000);
 });
