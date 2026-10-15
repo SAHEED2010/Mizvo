@@ -1,6 +1,6 @@
 # ADR-006: Passkeys, independent owner recovery, and recent step-up
 
-- **Status:** Proposed — not approved for deployment or security-gate activation
+- **Status:** Accepted architectural direction (2026-10-15) — implementation and production activation remain subject to the security gates below
 - **Date:** 2026-10-15
 - **Decision owners:** Mizvo team
 - **Depends on:** [ADR-001](001-multi-business-identity-and-access.md), [ADR-002](002-authentication-whatsapp-onboarding-and-recovery.md), [ADR-005](005-business-onboarding-and-active-business.md) (proposed), [ADR-007](007-phone-only-business-invitations.md) (proposed)
@@ -12,7 +12,7 @@ Mizvo uses Better Auth 1.7.7 Phone Number + Organization, Drizzle/PostgreSQL, Ne
 
 Owners may have no deliverable email address, and a temporary Better Auth email in the reserved .invalid domain is **never** a recovery destination or verified email. Mizvo does not yet own a canonical production domain or have approved live OTP delivery. Render's temporary hosting hostname must not silently become the long-lived passkey identity.
 
-## Proposed security model
+## Accepted architectural direction
 
 1. **Identity stays phone-first.** Keep Better Auth as the only user/session authority and the Organization plugin as the only business-membership authority. Add a version-compatible official @better-auth/passkey plugin as an *additional* credential on the existing user ID; do not create or link an account merely because a phone, email, organization name, WhatsApp sender or credential name matches.
 2. **Required enrollment for sensitive owners, not for ordinary business access.** An owner may register and create a business with a verified phone. Before privileged membership, recovery, ownership, credential or sensitive-report actions, require an independently enrolled passkey/recovery method and real recent authentication. Staff may enroll optionally. A new passkey on its own does not automatically unlock C2 APIs.
@@ -52,7 +52,7 @@ Owners may have no deliverable email address, and a temporary Better Auth email 
 
 - Activate the already-reviewed C2 lifecycle only after real C3 recovery and step-up verifiers are available and audited. Source invitation-acceptance identity from Better Auth session, not JSON. Retest last-owner and tenant invariants end-to-end.
 
-## Design questions requiring explicit review before marking Accepted
+## Mandatory implementation decisions still requiring explicit security review
 
 1. **First enrollment security:** How is an existing owner protected against SIM takeover / new-device enrollment when they do not yet have a passkey? Define a limited privilege state, trust checks and security hold; do not treat OTP as independent proof.
 2. **Production RP ID:** What permanent domain will Mizvo use and how will credentials registered against test hosting domains be migrated/re-enrolled?
@@ -73,4 +73,4 @@ Owners may have no deliverable email address, and a temporary Better Auth email 
 - Better Auth Drizzle adapter: https://better-auth.com/docs/adapters/drizzle
 - W3C Web Authentication Level 3: https://www.w3.org/TR/webauthn-3/
 
-This ADR is a **proposal**; its presence or C3a test code does not authorize real-user registration, live messaging, deployment provisioning, credential recovery activation, sensitive owner operations or production passkey enrollment.
+**Approval scope:** The Mizvo project owner approved the architectural direction on 2026-10-15: passkeys, independent emergency recovery codes, restricted phone-OTP-plus-recovery-code recovery, and fresh owner step-up. This does **not** approve implementations of the unresolved first-enrollment controls, recovery hold, WebAuthn domain, credential endpoints or proof persistence. C3a development/test work may begin only within the fail-closed boundaries above; changes affecting production authentication or sensitive owner actions require their own reviewed decisions and verification. This ADR and C3a test code do not authorize real-user registration, live messaging, deployment provisioning, credential recovery activation, owner-sensitive operations or production passkey enrollment.
