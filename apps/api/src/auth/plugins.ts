@@ -1,10 +1,52 @@
 import { randomUUID } from "node:crypto";
+import type { BetterAuthPlugin } from "better-auth";
 import { organization, phoneNumber } from "better-auth/plugins";
 import { businessAccess, businessRoles } from "./permissions.js";
 import type { SmsTransport } from "./sms.js";
 import { normalizeNigerianPhoneNumber, SmsDeliveryError } from "./sms.js";
 
 const allowedBusinessRoles = new Set(["owner", "manager", "staff", "viewer"]);
+
+const phoneInvitationDataSchema = {
+  id: "mizvo-phone-invitations",
+  // These tables are created by the reviewed Drizzle migrations. Registering
+  // their fields with Better Auth lets its adapter transact over them.
+  schema: {
+    phoneInvitation: {
+      modelName: "phoneInvitation",
+      disableMigration: true,
+      fields: {
+        id: { type: "string", required: true },
+        organizationId: { type: "string", required: true },
+        recipientPhoneHash: { type: "string", required: true },
+        tokenHash: { type: "string", required: true },
+        role: { type: "string", required: true },
+        status: { type: "string", required: true },
+        expiresAt: { type: "date", required: true },
+        createdAt: { type: "date", required: true },
+        inviterId: { type: "string", required: true },
+        acceptedBy: { type: "string", required: false },
+        acceptedAt: { type: "date", required: false },
+        revokedBy: { type: "string", required: false },
+        revokedAt: { type: "date", required: false },
+      },
+    },
+    businessAuditEvent: {
+      modelName: "businessAuditEvent",
+      disableMigration: true,
+      fields: {
+        id: { type: "string", required: true },
+        organizationId: { type: "string", required: true },
+        actorId: { type: "string", required: true },
+        action: { type: "string", required: true },
+        invitationId: { type: "string", required: false },
+        subjectUserId: { type: "string", required: false },
+        role: { type: "string", required: false },
+        createdAt: { type: "date", required: true },
+      },
+    },
+  },
+} satisfies BetterAuthPlugin;
 
 function assertBusinessRole(role: string | string[]) {
   if (Array.isArray(role) || !allowedBusinessRoles.has(role)) {
@@ -14,6 +56,7 @@ function assertBusinessRole(role: string | string[]) {
 
 export function createAuthPlugins(smsTransport: SmsTransport) {
   return [
+    phoneInvitationDataSchema,
     phoneNumber({
       expiresIn: 300,
       allowedAttempts: 3,
