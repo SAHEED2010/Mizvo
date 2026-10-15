@@ -57,6 +57,19 @@ try {
     `${userIndex}\n    uniqueIndex("member_organization_user_unique").on(table.organizationId, table.userId),\n    ${roleCheck}`,
   );
 
+  const passkeyStart = generated.indexOf("export const passkey = pgTable(");
+  const passkeyEnd = generated.indexOf("\n);", passkeyStart);
+  if (passkeyStart < 0 || passkeyEnd < 0)
+    throw new Error("Could not locate Better Auth's generated passkey table");
+  const passkeyTable = generated.slice(passkeyStart, passkeyEnd);
+  const passkeyCredentialIndex = 'index("passkey_credentialID_idx").on(table.credentialID),';
+  if (!passkeyTable.includes(passkeyCredentialIndex))
+    throw new Error("Generated passkey credential index changed; review schema augmentation");
+  generated = generated.replace(
+    passkeyCredentialIndex,
+    'uniqueIndex("passkey_credentialID_unique").on(table.credentialID),',
+  );
+
   if (generated.includes("export const phoneInvitation = pgTable(")) {
     throw new Error(
       "Generated schema unexpectedly already contains Mizvo's custom invitation tables",
