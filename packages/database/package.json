@@ -16,6 +16,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "db:auth-schema": "pnpm dlx auth@1.7.7 generate --adapter drizzle --dialect postgresql --config ../../apps/api/src/auth/schema.config.ts --output src/schema/auth.generated.ts --yes && node scripts/augment-auth-schema.mjs",
+    "db:auth-schema:check": "node scripts/check-auth-schema-regeneration.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "typecheck": "tsc --noEmit -p tsconfig.json"
