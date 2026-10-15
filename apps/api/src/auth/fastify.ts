@@ -42,6 +42,20 @@ export function registerAuthRoutes(
     method: ["GET", "POST"],
     url: "/api/auth/*",
     async preHandler(request: FastifyRequest, reply: FastifyReply) {
+      let path: string;
+      try {
+        path = decodeURIComponent(new URL(request.url, "http://localhost").pathname)
+          .replace(/\\+/g, "/")
+          .replace(/\/+$/, "")
+          .toLowerCase();
+      } catch {
+        return reply.status(404).send({ message: "Not found" });
+      }
+      // Keep the full browser-facing Organization plugin namespace blocked for
+      // every method; only the reviewed C1 business routes use server-side APIs.
+      if (path === "/api/auth/organization" || path.startsWith("/api/auth/organization/")) {
+        return reply.status(404).send({ message: "Not found" });
+      }
       if (request.method !== "POST") return;
 
       const origin = request.headers.origin;
@@ -49,13 +63,6 @@ export function registerAuthRoutes(
         return reply.status(403).send({ message: "Origin is not allowed" });
       }
 
-      const path = request.url.split("?", 1)[0];
-      // Organization plugin endpoints include invitations, membership changes,
-      // and deletion. Keep them server-only until their reviewed stages add
-      // step-up, recovery, and audit controls.
-      if (path?.startsWith("/api/auth/organization/")) {
-        return reply.status(404).send({ message: "Not found" });
-      }
       const operation =
         path === "/api/auth/phone-number/send-otp"
           ? "request"

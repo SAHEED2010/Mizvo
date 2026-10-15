@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { createDatabase } from "@mizvo/database";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -614,6 +615,20 @@ postgresSuite("authentication PostgreSQL invariants", () => {
         headers: { origin, cookie: ownerCookie ?? "" },
       });
       expect(rawOrganizationEndpoint.statusCode).toBe(404);
+      for (const method of ["GET", "POST"] as const) {
+        for (const cookie of [undefined, ownerCookie]) {
+          const blockedOrganizationReadOrWrite = await app.inject({
+            method,
+            url: "/api/auth/organization/list-invitations/",
+            ...(method === "POST" ? { payload: { organizationId: firstBusiness.id } } : {}),
+            headers: {
+              origin,
+              ...(cookie ? { cookie } : {}),
+            },
+          });
+          expect(blockedOrganizationReadOrWrite.statusCode).toBe(404);
+        }
+      }
 
       const secondUserCookie = await register("+2348041234567");
       const secondUserSession = await app.inject({
@@ -655,6 +670,116 @@ postgresSuite("authentication PostgreSQL invariants", () => {
       });
       expect(deniedSwitch.statusCode).toBe(403);
     } finally {
+      await app.close();
+    }
+  });
+
+  it("routes business create, list, and switch through the production Next.js proxy", async () => {
+    const origin = "http://127.0.0.1:3000";
+    const environment = {
+      AUTH_ENABLED: "true",
+      DATABASE_URL: databaseUrl as string,
+      BETTER_AUTH_SECRET: "integration-test-secret-with-at-least-32-chars",
+      BETTER_AUTH_URL: "https://auth.mizvo.test",
+      BETTER_AUTH_TRUSTED_ORIGINS: `${origin},https://app.mizvo.test`,
+      NODE_ENV: "production",
+    };
+    const app = buildApp(environment, { smsTransport });
+    const webDirectory = resolve(process.cwd(), "../web");
+    const nextCli = resolve(webDirectory, "node_modules/next/dist/bin/next");
+    let nextOutput = "";
+    let nextServer: ReturnType<typeof spawn> | undefined;
+
+    try {
+      await app.listen({ host: "127.0.0.1", port: 4000 });
+      nextServer = spawn(
+        process.execPath,
+        [nextCli, "start", "--hostname", "127.0.0.1", "--port", "3000"],
+        {
+          cwd: webDirectory,
+          env: {
+            ...process.env,
+            MIZVO_API_ORIGIN: "http://127.0.0.1:4000",
+            NEXT_TELEMETRY_DISABLED: "1",
+          },
+          stdio: ["ignore", "ignore", "pipe"],
+        },
+      );
+      nextServer.stderr?.setEncoding("utf8");
+      nextServer.stderr?.on("data", (chunk: string) => {
+        nextOutput += chunk;
+      });
+
+      let nextReady = false;
+      for (let attempt = 0; attempt < 120 && !nextReady; attempt += 1) {
+        if (nextServer.exitCode !== null || nextServer.signalCode !== null) {
+          throw new Error(`Next.js exited before startup: ${nextOutput}`);
+        }
+        try {
+          const response = await fetch(origin);
+          nextReady = response.ok;
+        } catch {
+          nextReady = false;
+        }
+        if (!nextReady) await new Promise((resolveDelay) => setTimeout(resolveDelay, 250));
+      }
+      if (!nextReady) throw new Error(`Next.js did not become ready: ${nextOutput}`);
+
+      const sendOtp = await fetch(`${origin}/api/auth/phone-number/send-otp`, {
+        method: "POST",
+        headers: { origin, "content-type": "application/json" },
+        body: JSON.stringify({ phoneNumber: "+2348031234567" }),
+      });
+      expect(sendOtp.status).toBe(200);
+      const verifyOtp = await fetch(`${origin}/api/auth/phone-number/verify`, {
+        method: "POST",
+        headers: { origin, "content-type": "application/json" },
+        body: JSON.stringify({ phoneNumber: "+2348031234567", code: deliveries.at(-1)?.code }),
+      });
+      expect(verifyOtp.status).toBe(200);
+      const cookie = verifyOtp.headers
+        .getSetCookie()
+        .map((value) => value.split(";", 1)[0])
+        .join("; ");
+      expect(cookie).toContain("better-auth");
+
+      const createBusiness = (name: string) =>
+        fetch(`${origin}/api/businesses`, {
+          method: "POST",
+          headers: { origin, cookie, "content-type": "application/json" },
+          body: JSON.stringify({ name }),
+        });
+      const firstResponse = await createBusiness("Proxy Shop One");
+      expect(firstResponse.status).toBe(201);
+      const firstBusiness = (await firstResponse.json()).business as { id: string };
+      const secondResponse = await createBusiness("Proxy Shop Two");
+      expect(secondResponse.status).toBe(201);
+      const secondBusiness = (await secondResponse.json()).business as { id: string };
+
+      const listResponse = await fetch(`${origin}/api/businesses`, { headers: { cookie } });
+      expect(listResponse.status).toBe(200);
+      expect((await listResponse.json()).businesses).toHaveLength(2);
+
+      const switchResponse = await fetch(`${origin}/api/businesses/active`, {
+        method: "PUT",
+        headers: { origin, cookie, "content-type": "application/json" },
+        body: JSON.stringify({ organizationId: firstBusiness.id }),
+      });
+      expect(switchResponse.status).toBe(200);
+      const activeResponse = await fetch(`${origin}/api/businesses/active`, {
+        headers: { cookie },
+      });
+      expect(activeResponse.status).toBe(200);
+      expect((await activeResponse.json()).business).toMatchObject({ id: firstBusiness.id });
+      expect(secondBusiness.id).not.toBe(firstBusiness.id);
+    } finally {
+      if (nextServer && nextServer.exitCode === null && nextServer.signalCode === null) {
+        nextServer.kill("SIGTERM");
+        await Promise.race([
+          new Promise<void>((resolveExit) => nextServer?.once("exit", () => resolveExit())),
+          new Promise((resolveDelay) => setTimeout(resolveDelay, 5000)),
+        ]);
+      }
       await app.close();
     }
   });
