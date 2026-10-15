@@ -291,9 +291,16 @@ export default function Home() {
                   {busy ? "Saving…" : "Create business"}
                 </button>
               </form>
+              <section className="business-list" aria-labelledby="staff-invitations-title">
+                <h3 id="staff-invitations-title">Invite staff</h3>
+                <p className="field-hint">
+                  Staff invitations will be available after independent recovery and recent sign-in
+                  security are set up.
+                </p>
+              </section>
               <p className="field-hint">
-                You’ll be the owner. Invitations and other membership changes will arrive in a later
-                release.
+                You’ll be the owner. Other membership changes will be available after additional
+                security setup.
               </p>
               <button
                 className="button button-secondary"
