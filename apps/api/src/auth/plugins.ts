@@ -51,7 +51,7 @@ export function createAuthPlugins(smsTransport: SmsTransport) {
           },
         },
       },
-      allowUserToCreateOrganization: false,
+      allowUserToCreateOrganization: async (user) => user.phoneNumberVerified === true,
       invitationExpiresIn: 48 * 60 * 60,
       organizationHooks: {
         async beforeAddMember({ member }) {

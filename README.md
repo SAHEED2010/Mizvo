@@ -16,6 +16,7 @@ Mizvo is a WhatsApp-first financial intelligence and growth application for Nige
 ## Repository status
 
 The pnpm TypeScript monorepo contains a Next.js website and Fastify API. Phase A added Better Auth, Drizzle/Neon schema and business authorization foundations. Phase B adds website phone OTP sign-in behind a provider-neutral adapter; delivery defaults to disabled, and authentication remains disabled until the deployment is configured and reviewed. Africa's Talking is an optional adapter, not an approved provider; restricted delivery integration testing must pass before public registration. Business setup, recovery enrollment, invitations, financial data, AI and WhatsApp onboarding are future phases.
+Phase C1 is implementing verified business creation and business switching behind a draft PR. Invitations and recovery/step-up remain separately reviewed later stages; financial data, AI and WhatsApp onboarding are future phases.
 
 ## Requirements
 
@@ -78,4 +79,4 @@ The auth schema command uses Better Auth's pinned CLI to regenerate the tables f
 - [Build plan](docs/BUILD_PLAN.md)
 - [Architecture decisions](docs/decisions/README.md)
 
-Accepted: [ADR-001](docs/decisions/001-multi-business-identity-and-access.md) (multi-business access) and [ADR-002](docs/decisions/002-authentication-whatsapp-onboarding-and-recovery.md) (Better Auth, phone-first registration, invitations and recovery). [ADR-004](docs/decisions/004-phone-otp-sms-delivery.md) remains proposed pending explicit team approval; it recommends provider-neutral delivery and identifies Africa's Talking as the first optional adapter, with public registration gated on integration testing and approval. Business onboarding, recovery, step-up, WhatsApp, the financial model, jobs and file workflows remain pending.
+Accepted: [ADR-001](docs/decisions/001-multi-business-identity-and-access.md) (multi-business access) and [ADR-002](docs/decisions/002-authentication-whatsapp-onboarding-and-recovery.md) (Better Auth, phone-first registration, invitations and recovery). [ADR-004](docs/decisions/004-phone-otp-sms-delivery.md) remains proposed pending explicit team approval; it recommends provider-neutral delivery and identifies Africa's Talking as the first optional adapter, with public registration gated on integration testing and approval. [ADR-005](docs/decisions/005-business-onboarding-and-active-business.md) records the proposed C1 implementation. Invitations, recovery/step-up, WhatsApp, the financial model, jobs and file workflows remain pending.

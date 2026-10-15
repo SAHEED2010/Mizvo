@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 type AuthenticatedUser = { name?: string; phoneNumber?: string };
+type Business = { id: string; name: string; role: string };
 
 function normalizePhone(value: string): string | null {
   const input = value.trim().replace(/[\s()-]/g, "");
@@ -25,6 +26,9 @@ export default function Home() {
   const [code, setCode] = useState("");
   const [step, setStep] = useState<"phone" | "code" | "signed-in">("phone");
   const [user, setUser] = useState<AuthenticatedUser | null>(null);
+  const [businesses, setBusinesses] = useState<Business[]>([]);
+  const [activeBusinessId, setActiveBusinessId] = useState<string | null>(null);
+  const [businessName, setBusinessName] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
 
@@ -38,6 +42,21 @@ export default function Home() {
         if (session?.user) {
           setUser(session.user);
           setStep("signed-in");
+          void fetch("/api/businesses", { credentials: "same-origin" })
+            .then((response) => {
+              if (!response.ok) throw new Error("business-list");
+              return readResponse(response);
+            })
+            .then((businessData) => {
+              if (!active) return;
+              setBusinesses((businessData.businesses as Business[] | undefined) ?? []);
+              setActiveBusinessId(
+                (businessData.activeBusinessId as string | null | undefined) ?? null,
+              );
+            })
+            .catch(() => {
+              if (active) setMessage("We couldn’t load your businesses. Please try again.");
+            });
         }
       })
       .catch(() => {
@@ -47,6 +66,66 @@ export default function Home() {
       active = false;
     };
   }, []);
+
+  async function loadBusinesses() {
+    try {
+      const response = await fetch("/api/businesses", { credentials: "same-origin" });
+      const data = await readResponse(response);
+      if (!response.ok) throw new Error("business-list");
+      setBusinesses((data.businesses as Business[] | undefined) ?? []);
+      setActiveBusinessId((data.activeBusinessId as string | null | undefined) ?? null);
+    } catch {
+      setMessage("We couldn’t load your businesses. Please try again.");
+    }
+  }
+
+  async function createBusiness(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const name = businessName.trim();
+    if (!name || name.length > 120) {
+      setMessage("Enter a business name up to 120 characters.");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch("/api/businesses", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (!response.ok) throw new Error("business-create");
+      setBusinessName("");
+      await loadBusinesses();
+      setMessage("Your business workspace is ready.");
+    } catch {
+      setMessage("We couldn’t create that business. Check the name and try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function switchBusiness(organizationId: string) {
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch("/api/businesses/active", {
+        method: "PUT",
+        credentials: "same-origin",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ organizationId }),
+      });
+      if (!response.ok) throw new Error("business-switch");
+      setActiveBusinessId(organizationId);
+      setMessage("Business switched.");
+    } catch {
+      await loadBusinesses();
+      setMessage("We couldn’t switch businesses. Your access may have changed.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function requestCode(event?: React.FormEvent<HTMLFormElement>) {
     event?.preventDefault();
@@ -97,6 +176,7 @@ export default function Home() {
       setStep("signed-in");
       setCode("");
       setMessage("Your phone is verified and you’re signed in.");
+      await loadBusinesses();
     } catch {
       setMessage("That code couldn’t be verified. Check it or request a new code.");
     } finally {
@@ -116,6 +196,9 @@ export default function Home() {
       });
       if (!response.ok) throw new Error("sign-out");
       setUser(null);
+      setBusinesses([]);
+      setActiveBusinessId(null);
+      setBusinessName("");
       setPhone("");
       setStep("phone");
       setMessage("You’re signed out.");
@@ -165,8 +248,52 @@ export default function Home() {
               <p className="eyebrow">You’re signed in</p>
               <h2>Welcome to Mizvo.</h2>
               <p className="form-intro">
-                {user?.phoneNumber ?? phone} is verified. Business setup will be available in a
-                later release.
+                {user?.phoneNumber ?? phone} is verified. Your businesses are kept under this
+                account.
+              </p>
+              <section className="business-list" aria-labelledby="business-list-title">
+                <h3 id="business-list-title">Your businesses</h3>
+                {businesses.length === 0 ? (
+                  <p className="field-hint">Create a business workspace to get started.</p>
+                ) : (
+                  <label className="business-picker" htmlFor="active-business">
+                    <span>Active business</span>
+                    <select
+                      disabled={busy}
+                      id="active-business"
+                      onChange={(event) => void switchBusiness(event.target.value)}
+                      value={activeBusinessId ?? ""}
+                    >
+                      <option disabled value="">
+                        Choose a business
+                      </option>
+                      {businesses.map((business) => (
+                        <option key={business.id} value={business.id}>
+                          {business.name} · {business.role}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+              </section>
+              <form onSubmit={createBusiness}>
+                <label htmlFor="business-name">Create a business</label>
+                <input
+                  autoComplete="organization"
+                  id="business-name"
+                  maxLength={120}
+                  onChange={(event) => setBusinessName(event.target.value)}
+                  placeholder="Business name"
+                  required
+                  value={businessName}
+                />
+                <button className="button" disabled={busy} type="submit">
+                  {busy ? "Saving…" : "Create business"}
+                </button>
+              </form>
+              <p className="field-hint">
+                You’ll be the owner. Invitations and other membership changes will arrive in a later
+                release.
               </p>
               <button
                 className="button button-secondary"
@@ -174,7 +301,7 @@ export default function Home() {
                 onClick={signOut}
                 type="button"
               >
-                {busy ? "Signing out…" : "Sign out"}
+                {busy ? "Please wait…" : "Sign out"}
               </button>
             </div>
           ) : step === "code" ? (

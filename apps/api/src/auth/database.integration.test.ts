@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { createDatabase } from "@mizvo/database";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -480,5 +481,306 @@ postgresSuite("authentication PostgreSQL invariants", () => {
     });
     expect(signedOut.statusCode).toBe(200);
     await app.close();
+  });
+
+  it("creates businesses for verified identities and rechecks membership when switching", async () => {
+    const environment = {
+      AUTH_ENABLED: "true",
+      DATABASE_URL: databaseUrl as string,
+      BETTER_AUTH_SECRET: "integration-test-secret-with-at-least-32-chars",
+      BETTER_AUTH_URL: "https://auth.mizvo.test",
+      BETTER_AUTH_TRUSTED_ORIGINS: "https://app.mizvo.test",
+      NODE_ENV: "production",
+    };
+    const app = buildApp(environment, { smsTransport });
+    const origin = "https://app.mizvo.test";
+    const register = async (phoneNumber: string) => {
+      const requested = await app.inject({
+        method: "POST",
+        url: "/api/auth/phone-number/send-otp",
+        payload: { phoneNumber },
+        headers: { origin },
+      });
+      expect(requested.statusCode).toBe(200);
+      const verified = await app.inject({
+        method: "POST",
+        url: "/api/auth/phone-number/verify",
+        payload: { phoneNumber, code: deliveries.at(-1)?.code },
+        headers: { origin },
+      });
+      expect(verified.statusCode).toBe(200);
+      const cookie = verified.headers["set-cookie"];
+      return Array.isArray(cookie) ? cookie[0]?.split(";", 1)[0] : cookie?.split(";", 1)[0];
+    };
+
+    try {
+      const unauthenticated = await app.inject({
+        method: "POST",
+        url: "/api/businesses",
+        payload: { name: "No session" },
+        headers: { origin },
+      });
+      expect(unauthenticated.statusCode).toBe(401);
+
+      const ownerCookie = await register("+2348031234567");
+      const deniedOrigin = await app.inject({
+        method: "POST",
+        url: "/api/businesses",
+        payload: { name: "Origin attack" },
+        headers: { origin: "https://attacker.example", cookie: ownerCookie ?? "" },
+      });
+      expect(deniedOrigin.statusCode).toBe(403);
+      const first = await app.inject({
+        method: "POST",
+        url: "/api/businesses",
+        payload: { name: "First Shop" },
+        headers: { origin, cookie: ownerCookie ?? "" },
+      });
+      expect(first.statusCode).toBe(201);
+      const firstBusiness = first.json<{ business: { id: string; role: string } }>().business;
+      expect(firstBusiness.role).toBe("owner");
+
+      const second = await app.inject({
+        method: "POST",
+        url: "/api/businesses",
+        payload: { name: "Second Shop" },
+        headers: { origin, cookie: ownerCookie ?? "" },
+      });
+      expect(second.statusCode).toBe(201);
+      const secondId = second.json<{ business: { id: string } }>().business.id;
+      const ownership = await client`
+        SELECT m."role", count(*) OVER ()::int AS total
+        FROM "member" m
+        JOIN "organization" o ON o."id" = m."organization_id"
+        WHERE o."id" = ${secondId}
+      `;
+      expect(ownership).toHaveLength(1);
+      expect(ownership[0]?.role).toBe("owner");
+      expect(ownership[0]?.total).toBe(1);
+
+      const duplicate = await app.inject({
+        method: "POST",
+        url: "/api/businesses",
+        payload: { name: "Second Shop" },
+        headers: { origin, cookie: ownerCookie ?? "" },
+      });
+      expect(duplicate.statusCode).toBe(409);
+      const parallelCreates = await Promise.all(
+        Array.from({ length: 2 }, () =>
+          app.inject({
+            method: "POST",
+            url: "/api/businesses",
+            payload: { name: "Concurrent Shop" },
+            headers: { origin, cookie: ownerCookie ?? "" },
+          }),
+        ),
+      );
+      expect(parallelCreates.map((response) => response.statusCode).sort()).toEqual([201, 409]);
+      const concurrentBusiness = parallelCreates.find((response) => response.statusCode === 201);
+      if (!concurrentBusiness) throw new Error("No concurrent business creation succeeded");
+      const concurrentBusinessId = concurrentBusiness.json<{ business: { id: string } }>().business
+        .id;
+      const concurrentOwners = await client`
+        SELECT "role" FROM "member" WHERE "organization_id" = ${concurrentBusinessId}
+      `;
+      expect(concurrentOwners).toEqual([{ role: "owner" }]);
+      const list = await app.inject({
+        method: "GET",
+        url: "/api/businesses",
+        headers: { cookie: ownerCookie ?? "" },
+      });
+      expect(list.json<{ businesses: unknown[] }>().businesses).toHaveLength(3);
+      const switched = await app.inject({
+        method: "PUT",
+        url: "/api/businesses/active",
+        payload: { organizationId: firstBusiness.id },
+        headers: { origin, cookie: ownerCookie ?? "" },
+      });
+      expect(switched.statusCode).toBe(200);
+      expect(switched.json<{ activeBusinessId: string }>().activeBusinessId).toBe(firstBusiness.id);
+      const activeSession = await app.inject({
+        method: "GET",
+        url: "/api/auth/get-session",
+        headers: { cookie: ownerCookie ?? "" },
+      });
+      expect(
+        activeSession.json<{ session: { activeOrganizationId: string } }>().session
+          .activeOrganizationId,
+      ).toBe(firstBusiness.id);
+
+      const rawOrganizationEndpoint = await app.inject({
+        method: "POST",
+        url: "/api/auth/organization/create",
+        payload: { name: "Plugin bypass" },
+        headers: { origin, cookie: ownerCookie ?? "" },
+      });
+      expect(rawOrganizationEndpoint.statusCode).toBe(404);
+      for (const method of ["GET", "POST"] as const) {
+        for (const cookie of [undefined, ownerCookie]) {
+          const blockedOrganizationReadOrWrite = await app.inject({
+            method,
+            url: "/api/auth/organization/list-invitations/",
+            ...(method === "POST" ? { payload: { organizationId: firstBusiness.id } } : {}),
+            headers: {
+              origin,
+              ...(cookie ? { cookie } : {}),
+            },
+          });
+          expect(blockedOrganizationReadOrWrite.statusCode).toBe(404);
+        }
+      }
+
+      const secondUserCookie = await register("+2348041234567");
+      const secondUserSession = await app.inject({
+        method: "GET",
+        url: "/api/auth/get-session",
+        headers: { cookie: secondUserCookie ?? "" },
+      });
+      const secondUserId = secondUserSession.json<{ user: { id: string } }>().user.id;
+      const crossBusinessSwitch = await app.inject({
+        method: "PUT",
+        url: "/api/businesses/active",
+        payload: { organizationId: firstBusiness.id },
+        headers: { origin, cookie: secondUserCookie ?? "" },
+      });
+      expect(crossBusinessSwitch.statusCode).toBe(403);
+      const appAuth = createTestAuth();
+      await appAuth.api.addMember({
+        body: { userId: secondUserId, organizationId: firstBusiness.id, role: "staff" as never },
+      });
+      const memberSwitch = await app.inject({
+        method: "PUT",
+        url: "/api/businesses/active",
+        payload: { organizationId: firstBusiness.id },
+        headers: { origin, cookie: secondUserCookie ?? "" },
+      });
+      expect(memberSwitch.statusCode).toBe(200);
+      await client`DELETE FROM "member" WHERE "organization_id" = ${firstBusiness.id} AND "user_id" = ${secondUserId}`;
+      const revokedActive = await app.inject({
+        method: "GET",
+        url: "/api/businesses/active",
+        headers: { cookie: secondUserCookie ?? "" },
+      });
+      expect(revokedActive.json<{ business: unknown }>().business).toBeNull();
+      const deniedSwitch = await app.inject({
+        method: "PUT",
+        url: "/api/businesses/active",
+        payload: { organizationId: firstBusiness.id },
+        headers: { origin, cookie: secondUserCookie ?? "" },
+      });
+      expect(deniedSwitch.statusCode).toBe(403);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("routes business create, list, and switch through the production Next.js proxy", async () => {
+    const origin = "http://127.0.0.1:3000";
+    const environment = {
+      AUTH_ENABLED: "true",
+      DATABASE_URL: databaseUrl as string,
+      BETTER_AUTH_SECRET: "integration-test-secret-with-at-least-32-chars",
+      BETTER_AUTH_URL: "https://auth.mizvo.test",
+      BETTER_AUTH_TRUSTED_ORIGINS: `${origin},https://app.mizvo.test`,
+      NODE_ENV: "production",
+    };
+    const app = buildApp(environment, { smsTransport });
+    const webDirectory = resolve(process.cwd(), "../web");
+    const nextCli = resolve(webDirectory, "node_modules/next/dist/bin/next");
+    let nextOutput = "";
+    let nextServer: ReturnType<typeof spawn> | undefined;
+
+    try {
+      await app.listen({ host: "127.0.0.1", port: 4000 });
+      nextServer = spawn(
+        process.execPath,
+        [nextCli, "start", "--hostname", "127.0.0.1", "--port", "3000"],
+        {
+          cwd: webDirectory,
+          env: {
+            ...process.env,
+            MIZVO_API_ORIGIN: "http://127.0.0.1:4000",
+            NEXT_TELEMETRY_DISABLED: "1",
+          },
+          stdio: ["ignore", "ignore", "pipe"],
+        },
+      );
+      nextServer.stderr?.setEncoding("utf8");
+      nextServer.stderr?.on("data", (chunk: string) => {
+        nextOutput += chunk;
+      });
+
+      let nextReady = false;
+      for (let attempt = 0; attempt < 120 && !nextReady; attempt += 1) {
+        if (nextServer.exitCode !== null || nextServer.signalCode !== null) {
+          throw new Error(`Next.js exited before startup: ${nextOutput}`);
+        }
+        try {
+          const response = await fetch(origin);
+          nextReady = response.ok;
+        } catch {
+          nextReady = false;
+        }
+        if (!nextReady) await new Promise((resolveDelay) => setTimeout(resolveDelay, 250));
+      }
+      if (!nextReady) throw new Error(`Next.js did not become ready: ${nextOutput}`);
+
+      const sendOtp = await fetch(`${origin}/api/auth/phone-number/send-otp`, {
+        method: "POST",
+        headers: { origin, "content-type": "application/json" },
+        body: JSON.stringify({ phoneNumber: "+2348031234567" }),
+      });
+      expect(sendOtp.status).toBe(200);
+      const verifyOtp = await fetch(`${origin}/api/auth/phone-number/verify`, {
+        method: "POST",
+        headers: { origin, "content-type": "application/json" },
+        body: JSON.stringify({ phoneNumber: "+2348031234567", code: deliveries.at(-1)?.code }),
+      });
+      expect(verifyOtp.status).toBe(200);
+      const cookie = verifyOtp.headers
+        .getSetCookie()
+        .map((value) => value.split(";", 1)[0])
+        .join("; ");
+      expect(cookie).toContain("better-auth");
+
+      const createBusiness = (name: string) =>
+        fetch(`${origin}/api/businesses`, {
+          method: "POST",
+          headers: { origin, cookie, "content-type": "application/json" },
+          body: JSON.stringify({ name }),
+        });
+      const firstResponse = await createBusiness("Proxy Shop One");
+      expect(firstResponse.status).toBe(201);
+      const firstBusiness = (await firstResponse.json()).business as { id: string };
+      const secondResponse = await createBusiness("Proxy Shop Two");
+      expect(secondResponse.status).toBe(201);
+      const secondBusiness = (await secondResponse.json()).business as { id: string };
+
+      const listResponse = await fetch(`${origin}/api/businesses`, { headers: { cookie } });
+      expect(listResponse.status).toBe(200);
+      expect((await listResponse.json()).businesses).toHaveLength(2);
+
+      const switchResponse = await fetch(`${origin}/api/businesses/active`, {
+        method: "PUT",
+        headers: { origin, cookie, "content-type": "application/json" },
+        body: JSON.stringify({ organizationId: firstBusiness.id }),
+      });
+      expect(switchResponse.status).toBe(200);
+      const activeResponse = await fetch(`${origin}/api/businesses/active`, {
+        headers: { cookie },
+      });
+      expect(activeResponse.status).toBe(200);
+      expect((await activeResponse.json()).business).toMatchObject({ id: firstBusiness.id });
+      expect(secondBusiness.id).not.toBe(firstBusiness.id);
+    } finally {
+      if (nextServer && nextServer.exitCode === null && nextServer.signalCode === null) {
+        nextServer.kill("SIGTERM");
+        await Promise.race([
+          new Promise<void>((resolveExit) => nextServer?.once("exit", () => resolveExit())),
+          new Promise((resolveDelay) => setTimeout(resolveDelay, 5000)),
+        ]);
+      }
+      await app.close();
+    }
   });
 });

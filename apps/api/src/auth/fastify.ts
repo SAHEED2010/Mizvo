@@ -2,6 +2,7 @@ import { createDatabase } from "@mizvo/database";
 import { fromNodeHeaders } from "better-auth/node";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import postgres from "postgres";
+import { registerBusinessRoutes } from "../businesses.js";
 import { createAuth } from "./auth.js";
 import { createPostgresOtpRateLimiter } from "./otp-rate-limit.js";
 import type { SmsTransport } from "./sms.js";
@@ -36,10 +37,25 @@ export function registerAuthRoutes(
   app.addHook("onClose", async () => {
     await Promise.all([otpRateLimiter.close(), database.client.end()]);
   });
+  registerBusinessRoutes(app, auth, database, trustedOrigins);
   app.route({
     method: ["GET", "POST"],
     url: "/api/auth/*",
     async preHandler(request: FastifyRequest, reply: FastifyReply) {
+      let path: string;
+      try {
+        path = decodeURIComponent(new URL(request.url, "http://localhost").pathname)
+          .replace(/\\+/g, "/")
+          .replace(/\/+$/, "")
+          .toLowerCase();
+      } catch {
+        return reply.status(404).send({ message: "Not found" });
+      }
+      // Keep the full browser-facing Organization plugin namespace blocked for
+      // every method; only the reviewed C1 business routes use server-side APIs.
+      if (path === "/api/auth/organization" || path.startsWith("/api/auth/organization/")) {
+        return reply.status(404).send({ message: "Not found" });
+      }
       if (request.method !== "POST") return;
 
       const origin = request.headers.origin;
@@ -47,7 +63,6 @@ export function registerAuthRoutes(
         return reply.status(403).send({ message: "Origin is not allowed" });
       }
 
-      const path = request.url.split("?", 1)[0];
       const operation =
         path === "/api/auth/phone-number/send-otp"
           ? "request"

@@ -11,6 +11,7 @@
     "test:postgres": "node -e \"if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required for PostgreSQL tests')\" && vitest run src/auth/database.integration.test.ts"
   },
   "dependencies": {
+    "@better-auth/core": "1.7.7",
     "@better-auth/drizzle-adapter": "1.7.7",
     "@mizvo/database": "workspace:*",
     "@mizvo/shared-schemas": "workspace:*",
