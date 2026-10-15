@@ -49,6 +49,9 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      - name: Check auth schema regeneration
+        run: pnpm --filter @mizvo/database db:auth-schema:check
+
       - name: Test
         run: pnpm test
         env:

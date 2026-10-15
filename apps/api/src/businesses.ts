@@ -4,9 +4,10 @@ import type { createDatabase } from "@mizvo/database";
 import { member, organization } from "@mizvo/database/schema/auth";
 import { fromNodeHeaders } from "better-auth/node";
 import { and, eq } from "drizzle-orm";
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { createAuth } from "./auth/auth.js";
 import { AuthorizationError, loadBusinessAccessContext } from "./auth/authorization.js";
+import { currentOwnerSensitiveActionDecision } from "./auth/owner-sensitive-action-guard.js";
 import { isBusinessRole } from "./auth/permissions.js";
 
 type Database = ReturnType<typeof createDatabase>;
@@ -232,4 +233,41 @@ export function registerBusinessRoutes(
       throw error;
     }
   });
+
+  const denyOwnerSensitiveAction = async (request: FastifyRequest, reply: FastifyReply) => {
+    const session = await getAuthenticatedSession(auth, request);
+    if (!session) return reply.status(401).send({ error: "authentication_required" });
+
+    const organizationId = session.session.activeOrganizationId;
+    if (!organizationId) return reply.status(403).send({ error: "owner_action_denied" });
+
+    try {
+      const context = await loadBusinessAccessContext(database.db, session.user.id, organizationId);
+      if (context.role !== "owner") {
+        return reply.status(403).send({ error: "owner_action_denied" });
+      }
+    } catch (error) {
+      if (error instanceof AuthorizationError) {
+        return reply.status(403).send({ error: "owner_action_denied" });
+      }
+      throw error;
+    }
+
+    const decision = await currentOwnerSensitiveActionDecision(session.user.id);
+    if (!decision.allowed) {
+      return reply.status(403).send({ error: "owner_security_setup_required" });
+    }
+    // No operation is enabled in C2. C3 must add the independently reviewed
+    // handler only after its real recovery and step-up evidence are available.
+    return reply.status(404).send({ error: "not_found" });
+  };
+
+  // These routes make the deny-by-default boundary explicit and testable.
+  // No route in C2 calls the internal invitation lifecycle functions.
+  app.post("/api/businesses/invitations", denyOwnerSensitiveAction);
+  app.delete("/api/businesses/invitations/:invitationId", denyOwnerSensitiveAction);
+  app.post("/api/businesses/invitations/accept", denyOwnerSensitiveAction);
+  app.patch("/api/businesses/members/:memberId", denyOwnerSensitiveAction);
+  app.delete("/api/businesses/members/:memberId", denyOwnerSensitiveAction);
+  app.post("/api/businesses/ownership/transfer", denyOwnerSensitiveAction);
 }

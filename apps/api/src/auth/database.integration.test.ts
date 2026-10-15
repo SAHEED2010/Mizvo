@@ -8,6 +8,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildApp } from "../app.js";
 import { createAuth } from "./auth.js";
 import { createPostgresOtpRateLimiter } from "./otp-rate-limit.js";
+import {
+  acceptPhoneInvitation,
+  createPhoneInvitation,
+  revokePhoneInvitation,
+} from "./phone-invitations.js";
 import type { SmsTransport } from "./sms.js";
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -49,7 +54,7 @@ postgresSuite("authentication PostgreSQL invariants", () => {
 
   beforeEach(async () => {
     deliveries.length = 0;
-    await client`TRUNCATE TABLE "invitation", "member", "organization", "session", "account", "verification", "rate_limit", "user" CASCADE`;
+    await client`TRUNCATE TABLE "business_audit_event", "phone_invitation", "invitation", "member", "organization", "session", "account", "verification", "rate_limit", "user" CASCADE`;
   });
 
   afterAll(async () => {
@@ -167,6 +172,341 @@ postgresSuite("authentication PostgreSQL invariants", () => {
     ).rejects.toThrow();
     const uncreatedMember = await client`SELECT "role" FROM "member" WHERE "user_id" = ${users[2]}`;
     expect(uncreatedMember).toHaveLength(0);
+  });
+
+  it("stores phone invitations and their audit trail without retaining bearer tokens or phone numbers", async () => {
+    const { users, organizationId } = await seedBusiness();
+    const auth = createTestAuth();
+    const secret = "invitation-hash-key-for-isolated-test-only";
+    const recipientPhone = "+2348031234567";
+    await client`UPDATE "user" SET "phone_number" = ${recipientPhone}, "phone_number_verified" = true WHERE "id" = ${users[1]}`;
+    await client`INSERT INTO "user" ("id", "name", "email") VALUES ('user-4', 'user-4', 'user-4@example.invalid')`;
+    for (const [index, role] of (["manager", "staff", "viewer"] as const).entries()) {
+      await auth.api.addMember({
+        body: { userId: users[index + 1] ?? "user-4", organizationId, role },
+      });
+      await expect(
+        createPhoneInvitation(auth, {
+          organizationId,
+          inviterId: users[index + 1] ?? "user-4",
+          recipientPhoneNumber: recipientPhone,
+          role: "staff",
+          phoneHashSecret: secret,
+        }),
+      ).rejects.toMatchObject({ code: "forbidden" });
+    }
+
+    const created = await createPhoneInvitation(auth, {
+      organizationId,
+      inviterId: users[0] as string,
+      recipientPhoneNumber: recipientPhone,
+      role: "staff",
+      phoneHashSecret: secret,
+    });
+    expect(created.token).toHaveLength(43);
+    expect(created.expiresAt.getTime() - Date.now()).toBeGreaterThan(47 * 60 * 60 * 1000);
+    expect(created.expiresAt.getTime() - Date.now()).toBeLessThanOrEqual(48 * 60 * 60 * 1000);
+
+    const stored =
+      await client`SELECT * FROM "phone_invitation" WHERE "id" = ${created.invitationId}`;
+    expect(stored).toHaveLength(1);
+    expect(stored[0]?.token_hash).not.toBe(created.token);
+    expect(JSON.stringify(stored[0])).not.toContain(recipientPhone);
+    expect(stored[0]?.role).toBe("staff");
+    const events =
+      await client`SELECT "action", "actor_id", "role" FROM "business_audit_event" WHERE "invitation_id" = ${created.invitationId}`;
+    expect(events).toEqual([{ action: "invitation.created", actor_id: users[0], role: "staff" }]);
+    expect(JSON.stringify(events)).not.toContain(recipientPhone);
+    expect(JSON.stringify(events)).not.toContain(created.token);
+
+    await expect(
+      createPhoneInvitation(auth, {
+        organizationId,
+        inviterId: users[1] as string,
+        recipientPhoneNumber: recipientPhone,
+        role: "manager",
+        phoneHashSecret: secret,
+      }),
+    ).rejects.toMatchObject({ code: "forbidden" });
+    await expect(
+      createPhoneInvitation(auth, {
+        organizationId,
+        inviterId: users[0] as string,
+        recipientPhoneNumber: recipientPhone,
+        role: "owner",
+        phoneHashSecret: secret,
+      }),
+    ).rejects.toMatchObject({ code: "invalid_invitation" });
+  });
+
+  it("accepts only the intended verified phone and records membership atomically", async () => {
+    const { users, organizationId } = await seedBusiness();
+    const auth = createTestAuth();
+    const secret = "invitation-hash-key-for-isolated-test-only";
+    await client`UPDATE "user" SET "phone_number" = '+2348031234567', "phone_number_verified" = false WHERE "id" = ${users[1]}`;
+    await client`UPDATE "user" SET "phone_number" = '+2348041234567', "phone_number_verified" = true WHERE "id" = ${users[2]}`;
+
+    const invitation = await createPhoneInvitation(auth, {
+      organizationId,
+      inviterId: users[0] as string,
+      recipientPhoneNumber: "+2348031234567",
+      role: "viewer",
+      phoneHashSecret: secret,
+    });
+    await expect(
+      acceptPhoneInvitation(auth, {
+        token: invitation.token,
+        recipientUserId: users[2] as string,
+        phoneHashSecret: secret,
+      }),
+    ).rejects.toMatchObject({ code: "invalid_invitation" });
+
+    await expect(
+      acceptPhoneInvitation(auth, {
+        token: invitation.token,
+        recipientUserId: users[1] as string,
+        phoneHashSecret: secret,
+      }),
+    ).rejects.toMatchObject({ code: "invalid_invitation" });
+    await client`UPDATE "user" SET "phone_number_verified" = true WHERE "id" = ${users[1]}`;
+
+    const [stillPending] =
+      await client`SELECT "status" FROM "phone_invitation" WHERE "id" = ${invitation.invitationId}`;
+    expect(stillPending?.status).toBe("pending");
+    const accepted = await acceptPhoneInvitation(auth, {
+      token: invitation.token,
+      recipientUserId: users[1] as string,
+      phoneHashSecret: secret,
+    });
+    expect(accepted).toEqual({ organizationId, role: "viewer" });
+    const memberships =
+      await client`SELECT "role" FROM "member" WHERE "organization_id" = ${organizationId} AND "user_id" = ${users[1]}`;
+    expect(memberships).toEqual([{ role: "viewer" }]);
+    await expect(
+      acceptPhoneInvitation(auth, {
+        token: invitation.token,
+        recipientUserId: users[1] as string,
+        phoneHashSecret: secret,
+      }),
+    ).rejects.toMatchObject({ code: "invalid_invitation" });
+    const acceptedEvents =
+      await client`SELECT "action", "subject_user_id", "role" FROM "business_audit_event" WHERE "invitation_id" = ${invitation.invitationId} ORDER BY "created_at", "action"`;
+    expect(acceptedEvents.map(({ action }) => action)).toEqual([
+      "invitation.created",
+      "invitation.accepted",
+    ]);
+    expect(acceptedEvents[1]).toMatchObject({ subject_user_id: users[1], role: "viewer" });
+
+    const duplicateMembershipInvite = await createPhoneInvitation(auth, {
+      organizationId,
+      inviterId: users[0] as string,
+      recipientPhoneNumber: "+2348031234567",
+      role: "staff",
+      phoneHashSecret: secret,
+    });
+    await expect(
+      acceptPhoneInvitation(auth, {
+        token: duplicateMembershipInvite.token,
+        recipientUserId: users[1] as string,
+        phoneHashSecret: secret,
+      }),
+    ).rejects.toMatchObject({ code: "already_member" });
+    const rolledBackDuplicate =
+      await client`SELECT "status" FROM "phone_invitation" WHERE "id" = ${duplicateMembershipInvite.invitationId}`;
+    expect(rolledBackDuplicate).toEqual([{ status: "pending" }]);
+    const duplicateMembershipEvents =
+      await client`SELECT "action" FROM "business_audit_event" WHERE "invitation_id" = ${duplicateMembershipInvite.invitationId}`;
+    expect(duplicateMembershipEvents.map(({ action }) => action)).toEqual(["invitation.created"]);
+  });
+
+  it("serializes parallel invitation redemption and audits only the winning membership", async () => {
+    const { users, organizationId } = await seedBusiness();
+    const auth = createTestAuth();
+    const secret = "invitation-hash-key-for-isolated-test-only";
+    const recipientPhone = "+2348031234567";
+    await client`UPDATE "user" SET "phone_number" = ${recipientPhone}, "phone_number_verified" = true WHERE "id" = ${users[1]}`;
+    const invitation = await createPhoneInvitation(auth, {
+      organizationId,
+      inviterId: users[0] as string,
+      recipientPhoneNumber: recipientPhone,
+      role: "manager",
+      phoneHashSecret: secret,
+    });
+
+    const redemptions = await Promise.allSettled(
+      Array.from({ length: 2 }, () =>
+        acceptPhoneInvitation(auth, {
+          token: invitation.token,
+          recipientUserId: users[1] as string,
+          phoneHashSecret: secret,
+        }),
+      ),
+    );
+    expect(redemptions.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(redemptions.filter((result) => result.status === "rejected")).toHaveLength(1);
+    const members =
+      await client`SELECT "role" FROM "member" WHERE "organization_id" = ${organizationId} AND "user_id" = ${users[1]}`;
+    expect(members).toEqual([{ role: "manager" }]);
+    const events =
+      await client`SELECT "action" FROM "business_audit_event" WHERE "invitation_id" = ${invitation.invitationId}`;
+    expect(events.map(({ action }) => action).sort()).toEqual([
+      "invitation.accepted",
+      "invitation.created",
+    ]);
+  });
+
+  it("revokes invitations within their business, rejects expired tokens, and preserves audit events", async () => {
+    const { users, organizationId } = await seedBusiness();
+    const auth = createTestAuth();
+    const secret = "invitation-hash-key-for-isolated-test-only";
+    const recipientPhone = "+2348031234567";
+    await client`UPDATE "user" SET "phone_number" = ${recipientPhone}, "phone_number_verified" = true WHERE "id" = ${users[1]}`;
+    const revoked = await createPhoneInvitation(auth, {
+      organizationId,
+      inviterId: users[0] as string,
+      recipientPhoneNumber: recipientPhone,
+      role: "staff",
+      phoneHashSecret: secret,
+    });
+    await expect(
+      client`UPDATE "phone_invitation" SET "role" = 'owner' WHERE "id" = ${revoked.invitationId}`,
+    ).rejects.toThrow(/phone_invitation_role_allowed/);
+    await expect(
+      revokePhoneInvitation(auth, {
+        organizationId: "another-business",
+        inviterId: users[0] as string,
+        invitationId: revoked.invitationId,
+      }),
+    ).rejects.toMatchObject({ code: "forbidden" });
+    await revokePhoneInvitation(auth, {
+      organizationId,
+      inviterId: users[0] as string,
+      invitationId: revoked.invitationId,
+    });
+    await expect(
+      acceptPhoneInvitation(auth, {
+        token: revoked.token,
+        recipientUserId: users[1] as string,
+        phoneHashSecret: secret,
+      }),
+    ).rejects.toMatchObject({ code: "invalid_invitation" });
+
+    const expired = await createPhoneInvitation(auth, {
+      organizationId,
+      inviterId: users[0] as string,
+      recipientPhoneNumber: recipientPhone,
+      role: "staff",
+      phoneHashSecret: secret,
+    });
+    await client`UPDATE "phone_invitation" SET "expires_at" = now() - interval '1 minute' WHERE "id" = ${expired.invitationId}`;
+    await expect(
+      acceptPhoneInvitation(auth, {
+        token: expired.token,
+        recipientUserId: users[1] as string,
+        phoneHashSecret: secret,
+      }),
+    ).rejects.toMatchObject({ code: "invalid_invitation" });
+
+    await expect(
+      client`UPDATE "business_audit_event" SET "action" = 'invitation.accepted' WHERE "invitation_id" = ${revoked.invitationId}`,
+    ).rejects.toThrow(/append-only/);
+    await expect(
+      client`DELETE FROM "business_audit_event" WHERE "invitation_id" = ${revoked.invitationId}`,
+    ).rejects.toThrow(/append-only/);
+    const events =
+      await client`SELECT "action" FROM "business_audit_event" WHERE "invitation_id" = ${revoked.invitationId} ORDER BY "created_at", "action"`;
+    expect(events.map(({ action }) => action).sort()).toEqual([
+      "invitation.created",
+      "invitation.revoked",
+    ]);
+  });
+
+  it("keeps invitation and membership HTTP routes closed until C3 evidence exists", async () => {
+    const environment = {
+      AUTH_ENABLED: "true",
+      DATABASE_URL: databaseUrl as string,
+      BETTER_AUTH_SECRET: "integration-test-secret-with-at-least-32-chars",
+      BETTER_AUTH_URL: "https://auth.mizvo.test",
+      BETTER_AUTH_TRUSTED_ORIGINS: "https://app.mizvo.test",
+      NODE_ENV: "production",
+    };
+    const app = buildApp(environment, { smsTransport });
+    const origin = "https://app.mizvo.test";
+    const register = async (phoneNumber: string) => {
+      const requested = await app.inject({
+        method: "POST",
+        url: "/api/auth/phone-number/send-otp",
+        payload: { phoneNumber },
+        headers: { origin },
+      });
+      expect(requested.statusCode).toBe(200);
+      const verified = await app.inject({
+        method: "POST",
+        url: "/api/auth/phone-number/verify",
+        payload: { phoneNumber, code: deliveries.at(-1)?.code },
+        headers: { origin },
+      });
+      expect(verified.statusCode).toBe(200);
+      const cookies = verified.headers["set-cookie"];
+      return Array.isArray(cookies) ? cookies[0]?.split(";", 1)[0] : cookies?.split(";", 1)[0];
+    };
+
+    try {
+      const ownerCookie = await register("+2348031234567");
+      const createdBusiness = await app.inject({
+        method: "POST",
+        url: "/api/businesses",
+        payload: { name: "C2 Guard Business" },
+        headers: { origin, cookie: ownerCookie ?? "" },
+      });
+      expect(createdBusiness.statusCode).toBe(201);
+      const businessId = createdBusiness.json<{ business: { id: string } }>().business.id;
+      const routes = [
+        {
+          method: "POST",
+          url: "/api/businesses/invitations",
+          payload: { phoneNumber: "+2348041234567", role: "staff" },
+        },
+        { method: "DELETE", url: "/api/businesses/invitations/invite-test" },
+        {
+          method: "POST",
+          url: "/api/businesses/invitations/accept",
+          payload: { token: "untrusted" },
+        },
+        {
+          method: "PATCH",
+          url: "/api/businesses/members/member-test",
+          payload: { role: "manager" },
+        },
+        { method: "DELETE", url: "/api/businesses/members/member-test" },
+        { method: "POST", url: "/api/businesses/ownership/transfer", payload: { userId: "other" } },
+      ] as const;
+
+      for (const route of routes) {
+        const unauthenticated = await app.inject({
+          method: route.method,
+          url: route.url,
+          ...("payload" in route ? { payload: route.payload } : {}),
+          headers: { origin },
+        });
+        expect(unauthenticated.statusCode).toBe(401);
+
+        const ownerAttempt = await app.inject({
+          method: route.method,
+          url: route.url,
+          ...("payload" in route ? { payload: route.payload } : {}),
+          headers: { origin, cookie: ownerCookie ?? "" },
+        });
+        expect(ownerAttempt.statusCode).toBe(403);
+        expect(ownerAttempt.json<{ error: string }>().error).toBe("owner_security_setup_required");
+      }
+
+      const invitationRows =
+        await client`SELECT count(*)::int AS count FROM "phone_invitation" WHERE "organization_id" = ${businessId}`;
+      expect(invitationRows[0]?.count).toBe(0);
+    } finally {
+      await app.close();
+    }
   });
 
   it("documents the current owner guard by rejecting organization cascade deletion", async () => {

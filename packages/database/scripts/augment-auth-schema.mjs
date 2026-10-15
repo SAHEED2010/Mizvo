@@ -2,6 +2,7 @@ import { readFile, unlink, writeFile } from "node:fs/promises";
 
 const generatedPath = new URL("../src/schema/auth.generated.ts", import.meta.url);
 const schemaPath = new URL("../src/schema/auth.ts", import.meta.url);
+const customSchemaPath = new URL("../src/schema/auth.custom.ts.fragment", import.meta.url);
 let generated;
 
 try {
@@ -19,7 +20,7 @@ try {
   pgCoreNames.add("uniqueIndex");
   generated = generated.replace(
     pgCoreImport[0],
-    `import { ${[...pgCoreNames].sort().join(", ")} } from "drizzle-orm/pg-core";`,
+    `import {\n  ${[...pgCoreNames].sort().join(",\n  ")},\n} from "drizzle-orm/pg-core";`,
   );
   const drizzleImport = generated.match(/^import \{([^}]+)\} from "drizzle-orm";$/m);
   if (drizzleImport) {
@@ -56,7 +57,14 @@ try {
     `${userIndex}\n    uniqueIndex("member_organization_user_unique").on(table.organizationId, table.userId),\n    ${roleCheck}`,
   );
 
-  await writeFile(schemaPath, generated);
+  if (generated.includes("export const phoneInvitation = pgTable(")) {
+    throw new Error(
+      "Generated schema unexpectedly already contains Mizvo's custom invitation tables",
+    );
+  }
+
+  const customSchema = await readFile(customSchemaPath, "utf8");
+  await writeFile(schemaPath, `${generated.trimEnd()}\n\n${customSchema.trim()}\n`);
 } finally {
   await unlink(generatedPath).catch(() => {});
 }

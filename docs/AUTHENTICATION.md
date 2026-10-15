@@ -1,6 +1,6 @@
 # Phone authentication setup
 
-Build 002 Phase B implements a website phone OTP flow through Better Auth's Phone Number plugin. For an existing verified phone it signs the user in; for a new phone it creates the account only after OTP verification. Business creation and membership setup are later work. OTP delivery is provider-neutral and defaults to disabled; no provider is currently approved for public registration.
+Build 002 Phase B implements a website phone OTP flow through Better Auth's Phone Number plugin. For an existing verified phone it signs the user in; for a new phone it creates the account only after OTP verification. Phase C1 adds verified business creation and membership switching. Phase C2 is building an internal phone-invitation foundation; owner-sensitive invitation and membership actions remain unavailable until independent recovery and recent step-up security are implemented and reviewed. OTP delivery is provider-neutral and defaults to disabled; no provider is currently approved for public registration.
 
 ## Current behavior
 
@@ -9,6 +9,7 @@ Build 002 Phase B implements a website phone OTP flow through Better Auth's Phon
 - Requests and verification attempts are rate-limited by Better Auth's persistent IP limit and additional database-backed IP/phone buckets. Phone request budgets are three per fifteen minutes; verification budgets are ten per phone per fifteen minutes.
 - `OTP_DELIVERY_PROVIDER` selects `disabled` or `africastalking`. Missing configuration means `disabled`; unsupported values fail startup instead of silently selecting a vendor. Africa's Talking is the first optional adapter, not an approved or live-tested provider.
 - Browser auth goes through the same-origin `/api/auth` Next.js rewrite. API POSTs require an exact configured `Origin`. Sessions use HttpOnly, SameSite=Lax cookies, Secure cookies in production, and an absolute seven-day expiry with refresh disabled. The API validates sessions using Better Auth and signs out through its session revocation endpoint.
+- Businesses use the Better Auth Organization membership as the canonical role source. Phone invitations use a separate server-side record because Better Auth's built-in invitation table requires email. The C2 lifecycle foundation does not send invitations or expose create/revoke/accept/member-change operations; the API denies those actions until C3's recovery and fresh step-up gates are implemented.
 - Optional email is unavailable. Email change is disabled and a phone-only account's Better Auth placeholder uses the reserved `.invalid` domain, remains unverified and cannot be used for delivery.
 - Failed or missing SMS configuration returns a generic failure. No user session is created on delivery failure. The public API never returns an OTP; provider errors, OTP values and raw provider responses are not logged.
 

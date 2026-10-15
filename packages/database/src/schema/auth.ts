@@ -192,3 +192,83 @@ export const invitationRelations = relations(invitation, ({ one }) => ({
     references: [user.id],
   }),
 }));
+
+// Phone invitations use their own model instead of Better Auth's email-only
+// invitation schema. Only the keyed recipient hash and token hash are stored.
+export const phoneInvitation = pgTable(
+  "phone_invitation",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "restrict" }),
+    recipientPhoneHash: text("recipient_phone_hash").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    role: text("role").notNull(),
+    status: text("status").default("pending").notNull(),
+    expiresAt: timestamp("expires_at").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    inviterId: text("inviter_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    acceptedBy: text("accepted_by"),
+    acceptedAt: timestamp("accepted_at"),
+    revokedBy: text("revoked_by"),
+    revokedAt: timestamp("revoked_at"),
+  },
+  (table) => [
+    index("phone_invitation_organization_status_idx").on(table.organizationId, table.status),
+    uniqueIndex("phone_invitation_token_hash_unique").on(table.tokenHash),
+    check(
+      "phone_invitation_recipient_hash_format",
+      sql`${table.recipientPhoneHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check("phone_invitation_token_hash_format", sql`${table.tokenHash} ~ '^[0-9a-f]{64}$'`),
+    check("phone_invitation_role_allowed", sql`${table.role} IN ('manager', 'staff', 'viewer')`),
+    check(
+      "phone_invitation_status_allowed",
+      sql`${table.status} IN ('pending', 'accepted', 'revoked')`,
+    ),
+    check(
+      "phone_invitation_lifecycle_consistent",
+      sql`(
+        (${table.status} = 'pending' AND ${table.acceptedBy} IS NULL AND ${table.acceptedAt} IS NULL AND ${table.revokedBy} IS NULL AND ${table.revokedAt} IS NULL)
+        OR (${table.status} = 'accepted' AND ${table.acceptedBy} IS NOT NULL AND ${table.acceptedAt} IS NOT NULL AND ${table.revokedBy} IS NULL AND ${table.revokedAt} IS NULL)
+        OR (${table.status} = 'revoked' AND ${table.acceptedBy} IS NULL AND ${table.acceptedAt} IS NULL AND ${table.revokedBy} IS NOT NULL AND ${table.revokedAt} IS NOT NULL)
+      )`,
+    ),
+  ],
+);
+
+export const businessAuditEvent = pgTable(
+  "business_audit_event",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "restrict" }),
+    actorId: text("actor_id").notNull(),
+    action: text("action").notNull(),
+    invitationId: text("invitation_id").references(() => phoneInvitation.id, {
+      onDelete: "restrict",
+    }),
+    subjectUserId: text("subject_user_id"),
+    role: text("role"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("business_audit_event_organization_created_idx").on(
+      table.organizationId,
+      table.createdAt,
+    ),
+    index("business_audit_event_invitation_idx").on(table.invitationId),
+    check(
+      "business_audit_event_action_allowed",
+      sql`${table.action} IN ('invitation.created', 'invitation.revoked', 'invitation.accepted')`,
+    ),
+    check(
+      "business_audit_event_role_allowed",
+      sql`${table.role} IS NULL OR ${table.role} IN ('manager', 'staff', 'viewer')`,
+    ),
+  ],
+);

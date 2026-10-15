@@ -22,6 +22,13 @@
       "when": 1791968709685,
       "tag": "0002_shiny_mach_iv",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792073159932,
+      "tag": "0003_late_scarecrow",
+      "breakpoints": true
     }
   ]
 }
