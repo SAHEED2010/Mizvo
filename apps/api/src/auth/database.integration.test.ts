@@ -1401,6 +1401,7 @@ postgresSuite("authentication PostgreSQL invariants", () => {
   it("enrolls a virtual-authenticator passkey on the same PostgreSQL-backed verified phone identity", async () => {
     const app = createDevelopmentPasskeyApp();
     const browser = await chromium.launch({ headless: true });
+    const originalTimezone = process.env.TZ;
     try {
       await app.listen({ host: "127.0.0.1", port: 3000 });
       const context = await browser.newContext();
@@ -1647,6 +1648,8 @@ postgresSuite("authentication PostgreSQL invariants", () => {
 
       // Exercise C3c only through its internal test service. No Fastify or
       // Better Auth authentication-verification route is enabled here.
+      process.env.TZ = "America/New_York";
+      expect(new Date("2026-10-16T12:00:00").getTimezoneOffset()).toBe(240);
       const ownedBusiness =
         await client`SELECT organization."id" FROM "organization" INNER JOIN "member" ON "member"."organization_id" = organization."id" WHERE "member"."user_id" = ${userId} AND "member"."role" = 'owner' LIMIT 1`;
       const businessId = ownedBusiness[0]?.id as string | undefined;
@@ -1693,12 +1696,18 @@ postgresSuite("authentication PostgreSQL invariants", () => {
       expect(successfulAssertion.challenge.expiresAt.getTime() - Date.now()).toBeLessThanOrEqual(
         5 * 60_000,
       );
+      const challengeLifetime = await client`
+        SELECT (EXTRACT(EPOCH FROM ("expires_at" - "created_at")) * 1000)::double precision AS lifetime_ms
+        FROM "step_up_challenge" WHERE "id" = ${successfulAssertion.challenge.challengeId}
+      `;
+      expect(challengeLifetime[0]?.lifetime_ms).toBe(5 * 60_000);
       const proof = await successfulAssertion.result();
       expect(proof).not.toBeNull();
       if (!proof) throw new Error("Expected a verified assertion to produce test evidence");
       const proofRows = await client`
         SELECT "user_id", "session_id", "business_id", "action", "target_digest",
-          "credential_id", "credential_fingerprint", "issued_at", "expires_at", "consumed_at"
+          "credential_id", "credential_fingerprint", "issued_at", "expires_at", "consumed_at",
+          (EXTRACT(EPOCH FROM ("expires_at" - "issued_at")) * 1000)::double precision AS lifetime_ms
         FROM "step_up_proof" WHERE "id" = ${proof.proofId}
       `;
       expect(proofRows).toHaveLength(1);
@@ -1709,6 +1718,7 @@ postgresSuite("authentication PostgreSQL invariants", () => {
         action: scope.action,
         target_digest: createHash("sha256").update(scope.target).digest("hex"),
         consumed_at: null,
+        lifetime_ms: 10 * 60_000,
       });
       expect(new Date(proof.expiresAt).getTime() - Date.now()).toBeLessThanOrEqual(10 * 60_000);
       expect(await stepUp.consumeProof(proof.proofId, { ...scope, target: "other-target" })).toBe(
@@ -1835,7 +1845,8 @@ postgresSuite("authentication PostgreSQL invariants", () => {
       const expiredChallenge = await stepUp.startChallenge(scope);
       await client`
         UPDATE "step_up_challenge"
-        SET "created_at" = now() - interval '6 minutes', "expires_at" = now() - interval '1 minute'
+        SET "created_at" = (now() AT TIME ZONE 'UTC') - interval '5 minutes 1 second',
+          "expires_at" = (now() AT TIME ZONE 'UTC') - interval '1 second'
         WHERE "id" = ${expiredChallenge.challengeId}
       `;
       const expiredResponse = await createAuthenticationResponse(page, expiredChallenge.options);
@@ -1902,7 +1913,7 @@ postgresSuite("authentication PostgreSQL invariants", () => {
         await client`SELECT "expires_at" FROM "session" WHERE "id" = ${sessionId}`;
       const originalSessionExpiry = sessionExpiry[0]?.expires_at;
       if (!originalSessionExpiry) throw new Error("Expected the test session to exist");
-      await client`UPDATE "session" SET "expires_at" = now() - interval '1 minute' WHERE "id" = ${sessionId}`;
+      await client`UPDATE "session" SET "expires_at" = (now() AT TIME ZONE 'UTC') - interval '1 second' WHERE "id" = ${sessionId}`;
       expect(await stepUp.consumeProof(sessionProof?.proofId as string, scope)).toBe(false);
       await client`UPDATE "session" SET "expires_at" = ${originalSessionExpiry} WHERE "id" = ${sessionId}`;
 
@@ -1911,7 +1922,7 @@ postgresSuite("authentication PostgreSQL invariants", () => {
         page,
         expiredSessionChallenge.options,
       );
-      await client`UPDATE "session" SET "expires_at" = now() - interval '1 minute' WHERE "id" = ${sessionId}`;
+      await client`UPDATE "session" SET "expires_at" = (now() AT TIME ZONE 'UTC') - interval '1 second' WHERE "id" = ${sessionId}`;
       expect(
         await stepUp.verifyAssertion({
           challengeId: expiredSessionChallenge.challengeId,
@@ -1925,8 +1936,10 @@ postgresSuite("authentication PostgreSQL invariants", () => {
       const expiringProof = await expiredProof.result();
       if (!expiringProof) throw new Error("Expected evidence to expire in the test");
       await client`
-        UPDATE "step_up_proof" SET "issued_at" = now() - interval '11 minutes',
-          "expires_at" = now() - interval '1 minute' WHERE "id" = ${expiringProof.proofId}
+        UPDATE "step_up_proof"
+        SET "issued_at" = (now() AT TIME ZONE 'UTC') - interval '10 minutes 1 second',
+          "expires_at" = (now() AT TIME ZONE 'UTC') - interval '1 second'
+        WHERE "id" = ${expiringProof.proofId}
       `;
       expect(await stepUp.consumeProof(expiringProof.proofId, scope)).toBe(false);
 
@@ -1945,6 +1958,14 @@ postgresSuite("authentication PostgreSQL invariants", () => {
         }),
       ]);
       expect(concurrentResults.filter(Boolean)).toHaveLength(1);
+      const concurrentProof = concurrentResults.find((result) => result !== null);
+      if (!concurrentProof) throw new Error("Expected one concurrent assertion to issue proof");
+      const proofClaims = await Promise.all([
+        stepUp.consumeProof(concurrentProof.proofId, scope),
+        stepUp.consumeProof(concurrentProof.proofId, scope),
+        stepUp.consumeProof(concurrentProof.proofId, scope),
+      ]);
+      expect(proofClaims.filter(Boolean)).toHaveLength(1);
 
       const revocableChallenge = await stepUp.startChallenge(scope);
       const revocableResponse = await createAuthenticationResponse(
@@ -2005,6 +2026,8 @@ postgresSuite("authentication PostgreSQL invariants", () => {
 
       await context.close();
     } finally {
+      if (originalTimezone === undefined) delete process.env.TZ;
+      else process.env.TZ = originalTimezone;
       await browser.close();
       await app.close();
     }

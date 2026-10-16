@@ -44,24 +44,16 @@ type Challenge = {
   recovery_activity_count: number;
   current_security_epoch: number;
   current_recovery_activity_count: number;
-  expires_at: Date | string;
+  expires_at_utc_ms: number;
   consumed_at: Date | string | null;
   public_key: string;
   current_counter: number;
   transports: string | null;
-  session_expires_at: Date | string;
+  session_expires_at_utc_ms: number;
   phone_number_verified: boolean | null;
   email_verified: boolean;
   current_role: string;
 };
-
-function timestampMillis(value: Date | string) {
-  if (value instanceof Date) return value.getTime();
-  // PostgreSQL `timestamp` (without time zone) is returned as a wall-clock
-  // string by postgres-js. Values are written as UTC ISO timestamps.
-  const normalized = value.includes("T") ? value : `${value.replace(" ", "T")}Z`;
-  return Date.parse(normalized);
-}
 
 export class StepUpTestServiceConfigurationError extends Error {
   constructor(message: string) {
@@ -150,11 +142,17 @@ async function recordAudit(
 
 async function loadChallenge(client: Sql, challengeId: string): Promise<Challenge | null> {
   const rows = await client<Challenge[]>`
-    SELECT challenge.*, credential."public_key", credential."counter" AS "current_counter", credential."transports",
+    SELECT challenge."id", challenge."challenge_hash", challenge."user_id", challenge."session_id",
+      challenge."business_id", challenge."credential_id", challenge."credential_fingerprint",
+      challenge."credential_counter", challenge."membership_role", challenge."action",
+      challenge."target_digest", challenge."security_epoch", challenge."recovery_activity_count",
+      challenge."consumed_at",
+      (EXTRACT(EPOCH FROM (challenge."expires_at" AT TIME ZONE 'UTC')) * 1000)::double precision AS "expires_at_utc_ms",
+      credential."public_key", credential."counter" AS "current_counter", credential."transports",
       test_identity."security_epoch" AS "current_security_epoch",
       (SELECT count(*)::int FROM "recovery_audit_event" audit
         WHERE audit."user_id" = challenge."user_id") AS "current_recovery_activity_count",
-      auth_session."expires_at" AS "session_expires_at",
+      (EXTRACT(EPOCH FROM (auth_session."expires_at" AT TIME ZONE 'UTC')) * 1000)::double precision AS "session_expires_at_utc_ms",
       account_user."phone_number_verified", account_user."email_verified",
       membership."role" AS "current_role"
     FROM "step_up_challenge" challenge
@@ -262,7 +260,7 @@ export function createStepUpTestService(options: { client: Sql }) {
 
     const session = await client`
       SELECT "id" FROM "session" WHERE "id" = ${scope.sessionId}
-        AND "user_id" = ${scope.userId} AND "expires_at" > now()
+      AND "user_id" = ${scope.userId} AND "expires_at" > (now() AT TIME ZONE 'UTC')
       LIMIT 1
     `;
     if (session.length !== 1) throw new StepUpTestServiceError("Current session is unavailable");
@@ -342,8 +340,8 @@ export function createStepUpTestService(options: { client: Sql }) {
     const fingerprint = credentialFingerprint(challenge.public_key);
     if (
       challenge.consumed_at ||
-      timestampMillis(challenge.expires_at) <= Date.now() ||
-      timestampMillis(challenge.session_expires_at) <= Date.now() ||
+      challenge.expires_at_utc_ms <= Date.now() ||
+      challenge.session_expires_at_utc_ms <= Date.now() ||
       challenge.phone_number_verified !== true ||
       challenge.email_verified !== false ||
       challenge.current_role !== "owner" ||
@@ -392,11 +390,17 @@ export function createStepUpTestService(options: { client: Sql }) {
     const expiresAt = new Date(issuedAt.getTime() + PROOF_LIFETIME_MS);
     return client.begin(async (tx) => {
       const current = await tx<Challenge[]>`
-        SELECT challenge.*, credential."public_key", credential."counter" AS "current_counter", credential."transports",
+        SELECT challenge."id", challenge."challenge_hash", challenge."user_id", challenge."session_id",
+          challenge."business_id", challenge."credential_id", challenge."credential_fingerprint",
+          challenge."credential_counter", challenge."membership_role", challenge."action",
+          challenge."target_digest", challenge."security_epoch", challenge."recovery_activity_count",
+          challenge."consumed_at",
+          (EXTRACT(EPOCH FROM (challenge."expires_at" AT TIME ZONE 'UTC')) * 1000)::double precision AS "expires_at_utc_ms",
+          credential."public_key", credential."counter" AS "current_counter", credential."transports",
           test_identity."security_epoch" AS "current_security_epoch",
           (SELECT count(*)::int FROM "recovery_audit_event" audit
             WHERE audit."user_id" = challenge."user_id") AS "current_recovery_activity_count",
-          auth_session."expires_at" AS "session_expires_at",
+          (EXTRACT(EPOCH FROM (auth_session."expires_at" AT TIME ZONE 'UTC')) * 1000)::double precision AS "session_expires_at_utc_ms",
           account_user."phone_number_verified", account_user."email_verified",
           membership."role" AS "current_role"
         FROM "step_up_challenge" challenge
@@ -420,8 +424,8 @@ export function createStepUpTestService(options: { client: Sql }) {
       const currentActivityCount = row?.current_recovery_activity_count ?? 0;
       const stateIsCurrent = Boolean(
         row &&
-          timestampMillis(row.expires_at) > issuedAt.getTime() &&
-          timestampMillis(row.session_expires_at) > issuedAt.getTime() &&
+          row.expires_at_utc_ms > issuedAt.getTime() &&
+          row.session_expires_at_utc_ms > issuedAt.getTime() &&
           row.phone_number_verified === true &&
           row.email_verified === false &&
           row.current_role === "owner" &&
@@ -484,9 +488,15 @@ export function createStepUpTestService(options: { client: Sql }) {
       // race evidence redemption.
       await tx`SELECT pg_advisory_xact_lock(hashtextextended(${scope.userId}, 0))`;
       const rows = await tx`
-        SELECT proof.*, credential."public_key", credential."counter" AS "current_counter",
+        SELECT proof."id", proof."challenge_id", proof."user_id", proof."session_id", proof."business_id",
+          proof."credential_id", proof."credential_fingerprint", proof."credential_counter",
+          proof."membership_role", proof."action", proof."target_digest", proof."security_epoch",
+          proof."recovery_activity_count", proof."consumed_at",
+          (EXTRACT(EPOCH FROM (proof."issued_at" AT TIME ZONE 'UTC')) * 1000)::double precision AS "issued_at_utc_ms",
+          (EXTRACT(EPOCH FROM (proof."expires_at" AT TIME ZONE 'UTC')) * 1000)::double precision AS "expires_at_utc_ms",
+          credential."public_key", credential."counter" AS "current_counter",
           identity."security_epoch" AS "current_security_epoch",
-          auth_session."expires_at" AS "session_expires_at",
+          (EXTRACT(EPOCH FROM (auth_session."expires_at" AT TIME ZONE 'UTC')) * 1000)::double precision AS "session_expires_at_utc_ms",
           account_user."phone_number_verified", account_user."email_verified",
           membership."role" AS "current_role",
           (SELECT count(*)::int FROM "recovery_audit_event" audit
@@ -519,13 +529,13 @@ export function createStepUpTestService(options: { client: Sql }) {
             target_digest: string;
             security_epoch: number;
             recovery_activity_count: number;
-            issued_at: Date | string;
-            expires_at: Date | string;
+            issued_at_utc_ms: number;
+            expires_at_utc_ms: number;
             consumed_at: Date | string | null;
             public_key: string;
             current_counter: number;
             current_security_epoch: number;
-            session_expires_at: Date | string;
+            session_expires_at_utc_ms: number;
             phone_number_verified: boolean | null;
             email_verified: boolean;
             current_role: string;
@@ -539,10 +549,10 @@ export function createStepUpTestService(options: { client: Sql }) {
           proof.action === scope.action &&
           proof.target_digest === digest &&
           proof.consumed_at === null &&
-          timestampMillis(proof.issued_at) <= Date.now() &&
-          timestampMillis(proof.issued_at) >= Date.now() - PROOF_LIFETIME_MS &&
-          timestampMillis(proof.expires_at) > Date.now() &&
-          timestampMillis(proof.session_expires_at) > Date.now() &&
+          proof.issued_at_utc_ms <= Date.now() &&
+          proof.issued_at_utc_ms >= Date.now() - PROOF_LIFETIME_MS &&
+          proof.expires_at_utc_ms > Date.now() &&
+          proof.session_expires_at_utc_ms > Date.now() &&
           proof.phone_number_verified === true &&
           proof.email_verified === false &&
           proof.current_role === proof.membership_role &&
