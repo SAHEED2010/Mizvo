@@ -1524,6 +1524,10 @@ postgresSuite("authentication PostgreSQL invariants", () => {
       const credentialChallengeCookies = await currentCookieHeader();
       const enrolled = await submitRegistration(credentialResponse, credentialChallengeCookies);
       expect(enrolled.statusCode, enrolled.body).toBe(200);
+      const enrolledVirtualCredential = (
+        await cdp.send("WebAuthn.getCredentials", { authenticatorId })
+      ).credentials[0];
+      expect(enrolledVirtualCredential).toBeTruthy();
 
       const replayed = await submitRegistration(credentialResponse, credentialChallengeCookies);
       expect(replayed.statusCode).toBeGreaterThanOrEqual(400);
@@ -1569,6 +1573,15 @@ postgresSuite("authentication PostgreSQL invariants", () => {
       );
       expect(missingUserVerificationResult.statusCode).toBeGreaterThanOrEqual(400);
       expect((await client`SELECT count(*)::int AS count FROM "passkey"`)[0]?.count).toBe(1);
+
+      // Negative registration attempts clear the virtual authenticator to
+      // avoid its existing credential satisfying excludeCredentials. Restore
+      // the credential that was actually enrolled before the C3c assertion.
+      await cdp.send("WebAuthn.clearCredentials", { authenticatorId });
+      await cdp.send("WebAuthn.addCredential", {
+        authenticatorId,
+        ...enrolledVirtualCredential,
+      });
 
       const userAfter =
         await client`SELECT "id", "phone_number", "phone_number_verified" FROM "user" WHERE "phone_number" = ${phoneNumber}`;
