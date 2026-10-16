@@ -110,12 +110,8 @@
           "name": "account_user_id_user_id_fk",
           "tableFrom": "account",
           "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -223,12 +219,8 @@
           "name": "business_audit_event_organization_id_organization_id_fk",
           "tableFrom": "business_audit_event",
           "tableTo": "organization",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -236,12 +228,8 @@
           "name": "business_audit_event_invitation_id_phone_invitation_id_fk",
           "tableFrom": "business_audit_event",
           "tableTo": "phone_invitation",
-          "columnsFrom": [
-            "invitation_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["invitation_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -353,12 +341,8 @@
           "name": "invitation_organization_id_organization_id_fk",
           "tableFrom": "invitation",
           "tableTo": "organization",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -366,12 +350,8 @@
           "name": "invitation_inviter_id_user_id_fk",
           "tableFrom": "invitation",
           "tableTo": "user",
-          "columnsFrom": [
-            "inviter_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["inviter_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -475,12 +455,8 @@
           "name": "member_organization_id_organization_id_fk",
           "tableFrom": "member",
           "tableTo": "organization",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -488,12 +464,8 @@
           "name": "member_user_id_user_id_fk",
           "tableFrom": "member",
           "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -557,9 +529,7 @@
         "organization_slug_unique": {
           "name": "organization_slug_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "slug"
-          ]
+          "columns": ["slug"]
         }
       },
       "policies": {},
@@ -674,12 +644,8 @@
           "name": "passkey_user_id_user_id_fk",
           "tableFrom": "passkey",
           "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -818,12 +784,8 @@
           "name": "phone_invitation_organization_id_organization_id_fk",
           "tableFrom": "phone_invitation",
           "tableTo": "organization",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["organization_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -831,12 +793,8 @@
           "name": "phone_invitation_inviter_id_user_id_fk",
           "tableFrom": "phone_invitation",
           "tableTo": "user",
-          "columnsFrom": [
-            "inviter_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["inviter_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -904,9 +862,7 @@
         "rate_limit_key_unique": {
           "name": "rate_limit_key_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "key"
-          ]
+          "columns": ["key"]
         }
       },
       "policies": {},
@@ -977,12 +933,8 @@
           "name": "recovery_attempt_user_id_user_id_fk",
           "tableFrom": "recovery_attempt",
           "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -992,10 +944,7 @@
         "recovery_attempt_user_id_unique": {
           "name": "recovery_attempt_user_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "user_id",
-            "id"
-          ]
+          "columns": ["user_id", "id"]
         }
       },
       "policies": {},
@@ -1081,12 +1030,8 @@
           "name": "recovery_audit_event_user_id_user_id_fk",
           "tableFrom": "recovery_audit_event",
           "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -1221,12 +1166,8 @@
           "name": "recovery_capability_user_id_user_id_fk",
           "tableFrom": "recovery_capability",
           "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1234,14 +1175,8 @@
           "name": "recovery_capability_user_attempt_fk",
           "tableFrom": "recovery_capability",
           "tableTo": "recovery_attempt",
-          "columnsFrom": [
-            "user_id",
-            "attempt_id"
-          ],
-          "columnsTo": [
-            "user_id",
-            "id"
-          ],
+          "columnsFrom": ["user_id", "attempt_id"],
+          "columnsTo": ["user_id", "id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1368,12 +1303,8 @@
           "name": "recovery_code_user_id_user_id_fk",
           "tableFrom": "recovery_code",
           "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1381,14 +1312,8 @@
           "name": "recovery_code_user_set_fk",
           "tableFrom": "recovery_code",
           "tableTo": "recovery_code_set",
-          "columnsFrom": [
-            "user_id",
-            "set_id"
-          ],
-          "columnsTo": [
-            "user_id",
-            "id"
-          ],
+          "columnsFrom": ["user_id", "set_id"],
+          "columnsTo": ["user_id", "id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1495,12 +1420,8 @@
           "name": "recovery_code_set_user_id_user_id_fk",
           "tableFrom": "recovery_code_set",
           "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1510,10 +1431,7 @@
         "recovery_code_set_user_id_unique": {
           "name": "recovery_code_set_user_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "user_id",
-            "id"
-          ]
+          "columns": ["user_id", "id"]
         }
       },
       "policies": {},
@@ -1559,12 +1477,8 @@
           "name": "recovery_test_identity_user_id_user_id_fk",
           "tableFrom": "recovery_test_identity",
           "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1662,12 +1576,8 @@
           "name": "session_user_id_user_id_fk",
           "tableFrom": "session",
           "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1677,9 +1587,7 @@
         "session_token_unique": {
           "name": "session_token_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "token"
-          ]
+          "columns": ["token"]
         }
       },
       "policies": {},
@@ -1825,12 +1733,8 @@
           "name": "step_up_challenge_user_id_step_up_test_identity_user_id_fk",
           "tableFrom": "step_up_challenge",
           "tableTo": "step_up_test_identity",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "user_id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["user_id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1838,12 +1742,8 @@
           "name": "step_up_challenge_session_id_session_id_fk",
           "tableFrom": "step_up_challenge",
           "tableTo": "session",
-          "columnsFrom": [
-            "session_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["session_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1851,12 +1751,8 @@
           "name": "step_up_challenge_business_id_organization_id_fk",
           "tableFrom": "step_up_challenge",
           "tableTo": "organization",
-          "columnsFrom": [
-            "business_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["business_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1864,12 +1760,8 @@
           "name": "step_up_challenge_credential_fk",
           "tableFrom": "step_up_challenge",
           "tableTo": "passkey",
-          "columnsFrom": [
-            "credential_id"
-          ],
-          "columnsTo": [
-            "credential_id"
-          ],
+          "columnsFrom": ["credential_id"],
+          "columnsTo": ["credential_id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1879,9 +1771,7 @@
         "step_up_challenge_challenge_hash_unique": {
           "name": "step_up_challenge_challenge_hash_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "challenge_hash"
-          ]
+          "columns": ["challenge_hash"]
         }
       },
       "policies": {},
@@ -2063,12 +1953,8 @@
           "name": "step_up_proof_challenge_id_step_up_challenge_id_fk",
           "tableFrom": "step_up_proof",
           "tableTo": "step_up_challenge",
-          "columnsFrom": [
-            "challenge_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["challenge_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -2076,12 +1962,8 @@
           "name": "step_up_proof_user_id_step_up_test_identity_user_id_fk",
           "tableFrom": "step_up_proof",
           "tableTo": "step_up_test_identity",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "user_id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["user_id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -2089,12 +1971,8 @@
           "name": "step_up_proof_session_id_session_id_fk",
           "tableFrom": "step_up_proof",
           "tableTo": "session",
-          "columnsFrom": [
-            "session_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["session_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -2102,12 +1980,8 @@
           "name": "step_up_proof_business_id_organization_id_fk",
           "tableFrom": "step_up_proof",
           "tableTo": "organization",
-          "columnsFrom": [
-            "business_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["business_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -2115,12 +1989,8 @@
           "name": "step_up_proof_credential_fk",
           "tableFrom": "step_up_proof",
           "tableTo": "passkey",
-          "columnsFrom": [
-            "credential_id"
-          ],
-          "columnsTo": [
-            "credential_id"
-          ],
+          "columnsFrom": ["credential_id"],
+          "columnsTo": ["credential_id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2130,9 +2000,7 @@
         "step_up_proof_challenge_id_unique": {
           "name": "step_up_proof_challenge_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "challenge_id"
-          ]
+          "columns": ["challenge_id"]
         }
       },
       "policies": {},
@@ -2248,12 +2116,8 @@
           "name": "step_up_test_audit_event_user_id_step_up_test_identity_user_id_fk",
           "tableFrom": "step_up_test_audit_event",
           "tableTo": "step_up_test_identity",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "user_id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["user_id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -2261,12 +2125,8 @@
           "name": "step_up_test_audit_event_business_id_organization_id_fk",
           "tableFrom": "step_up_test_audit_event",
           "tableTo": "organization",
-          "columnsFrom": [
-            "business_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["business_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -2327,12 +2187,8 @@
           "name": "step_up_test_identity_user_id_user_id_fk",
           "tableFrom": "step_up_test_identity",
           "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2421,16 +2277,12 @@
         "user_email_unique": {
           "name": "user_email_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "email"
-          ]
+          "columns": ["email"]
         },
         "user_phone_number_unique": {
           "name": "user_phone_number_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "phone_number"
-          ]
+          "columns": ["phone_number"]
         }
       },
       "policies": {},
