@@ -44,16 +44,24 @@ type Challenge = {
   recovery_activity_count: number;
   current_security_epoch: number;
   current_recovery_activity_count: number;
-  expires_at: Date;
-  consumed_at: Date | null;
+  expires_at: Date | string;
+  consumed_at: Date | string | null;
   public_key: string;
   current_counter: number;
   transports: string | null;
-  session_expires_at: Date;
+  session_expires_at: Date | string;
   phone_number_verified: boolean | null;
   email_verified: boolean;
   current_role: string;
 };
+
+function timestampMillis(value: Date | string) {
+  if (value instanceof Date) return value.getTime();
+  // PostgreSQL `timestamp` (without time zone) is returned as a wall-clock
+  // string by postgres-js. Values are written as UTC ISO timestamps.
+  const normalized = value.includes("T") ? value : `${value.replace(" ", "T")}Z`;
+  return Date.parse(normalized);
+}
 
 export class StepUpTestServiceConfigurationError extends Error {
   constructor(message: string) {
@@ -334,8 +342,8 @@ export function createStepUpTestService(options: { client: Sql }) {
     const fingerprint = credentialFingerprint(challenge.public_key);
     if (
       challenge.consumed_at ||
-      challenge.expires_at.getTime() <= Date.now() ||
-      challenge.session_expires_at.getTime() <= Date.now() ||
+      timestampMillis(challenge.expires_at) <= Date.now() ||
+      timestampMillis(challenge.session_expires_at) <= Date.now() ||
       challenge.phone_number_verified !== true ||
       challenge.email_verified !== false ||
       challenge.current_role !== "owner" ||
@@ -412,8 +420,8 @@ export function createStepUpTestService(options: { client: Sql }) {
       const currentActivityCount = row?.current_recovery_activity_count ?? 0;
       const stateIsCurrent = Boolean(
         row &&
-          row.expires_at.getTime() > issuedAt.getTime() &&
-          row.session_expires_at.getTime() > issuedAt.getTime() &&
+          timestampMillis(row.expires_at) > issuedAt.getTime() &&
+          timestampMillis(row.session_expires_at) > issuedAt.getTime() &&
           row.phone_number_verified === true &&
           row.email_verified === false &&
           row.current_role === "owner" &&
@@ -511,13 +519,13 @@ export function createStepUpTestService(options: { client: Sql }) {
             target_digest: string;
             security_epoch: number;
             recovery_activity_count: number;
-            issued_at: Date;
-            expires_at: Date;
-            consumed_at: Date | null;
+            issued_at: Date | string;
+            expires_at: Date | string;
+            consumed_at: Date | string | null;
             public_key: string;
             current_counter: number;
             current_security_epoch: number;
-            session_expires_at: Date;
+            session_expires_at: Date | string;
             phone_number_verified: boolean | null;
             email_verified: boolean;
             current_role: string;
@@ -531,10 +539,10 @@ export function createStepUpTestService(options: { client: Sql }) {
           proof.action === scope.action &&
           proof.target_digest === digest &&
           proof.consumed_at === null &&
-          proof.issued_at.getTime() <= Date.now() &&
-          proof.issued_at.getTime() >= Date.now() - PROOF_LIFETIME_MS &&
-          proof.expires_at.getTime() > Date.now() &&
-          proof.session_expires_at.getTime() > Date.now() &&
+          timestampMillis(proof.issued_at) <= Date.now() &&
+          timestampMillis(proof.issued_at) >= Date.now() - PROOF_LIFETIME_MS &&
+          timestampMillis(proof.expires_at) > Date.now() &&
+          timestampMillis(proof.session_expires_at) > Date.now() &&
           proof.phone_number_verified === true &&
           proof.email_verified === false &&
           proof.current_role === proof.membership_role &&
