@@ -3,11 +3,13 @@ import {
   bigint,
   boolean,
   check,
+  foreignKey,
   index,
   integer,
   pgTable,
   text,
   timestamp,
+  unique,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 
@@ -300,6 +302,131 @@ export const businessAuditEvent = pgTable(
     check(
       "business_audit_event_role_allowed",
       sql`${table.role} IS NULL OR ${table.role} IN ('manager', 'staff', 'viewer')`,
+    ),
+  ],
+);
+
+// C3b development/test-only recovery foundation. These records are not wired
+// to an HTTP handler and cannot authorize Better Auth sessions or business work.
+export const recoveryCodeSet = pgTable(
+  "recovery_code_set",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    epoch: integer("epoch").notNull(),
+    provenance: text("provenance").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    revokedAt: timestamp("revoked_at"),
+  },
+  (table) => [
+    uniqueIndex("recovery_code_set_user_epoch_unique").on(table.userId, table.epoch),
+    unique("recovery_code_set_user_id_unique").on(table.userId, table.id),
+    index("recovery_code_set_user_active_idx").on(table.userId, table.revokedAt),
+    check("recovery_code_set_epoch_positive", sql`${table.epoch} > 0`),
+    check("recovery_code_set_provenance_test_only", sql`${table.provenance} = 'synthetic_test'`),
+  ],
+);
+
+export const recoveryCode = pgTable(
+  "recovery_code",
+  {
+    id: text("id").primaryKey(),
+    setId: text("set_id").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    verifier: text("verifier").notNull(),
+    keyVersion: text("key_version").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    consumedAt: timestamp("consumed_at"),
+    revokedAt: timestamp("revoked_at"),
+  },
+  (table) => [
+    uniqueIndex("recovery_code_verifier_unique").on(table.verifier),
+    index("recovery_code_user_set_state_idx").on(table.userId, table.setId, table.consumedAt),
+    foreignKey({
+      name: "recovery_code_user_set_fk",
+      columns: [table.userId, table.setId],
+      foreignColumns: [recoveryCodeSet.userId, recoveryCodeSet.id],
+    }).onDelete("cascade"),
+    check("recovery_code_verifier_format", sql`${table.verifier} ~ '^[0-9a-f]{64}$'`),
+  ],
+);
+
+export const recoveryAttempt = pgTable(
+  "recovery_attempt",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    purpose: text("purpose").notNull(),
+    outcome: text("outcome").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("recovery_attempt_user_time_idx").on(table.userId, table.createdAt),
+    unique("recovery_attempt_user_id_unique").on(table.userId, table.id),
+    check("recovery_attempt_purpose_test_only", sql`${table.purpose} = 'synthetic_test'`),
+    check(
+      "recovery_attempt_outcome_allowed",
+      sql`${table.outcome} IN ('pending', 'invalid_proof', 'invalid_code', 'rate_limited', 'redeemed', 'replay', 'key_unavailable')`,
+    ),
+  ],
+);
+
+export const recoveryCapability = pgTable(
+  "recovery_capability",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    attemptId: text("attempt_id").notNull(),
+    purpose: text("purpose").notNull(),
+    scope: text("scope").notNull(),
+    verifier: text("verifier").notNull(),
+    keyVersion: text("key_version").notNull(),
+    expiresAt: timestamp("expires_at").notNull(),
+    usedAt: timestamp("used_at"),
+    revokedAt: timestamp("revoked_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("recovery_capability_attempt_unique").on(table.attemptId),
+    index("recovery_capability_user_expiry_idx").on(table.userId, table.expiresAt),
+    foreignKey({
+      name: "recovery_capability_user_attempt_fk",
+      columns: [table.userId, table.attemptId],
+      foreignColumns: [recoveryAttempt.userId, recoveryAttempt.id],
+    }).onDelete("cascade"),
+    check("recovery_capability_verifier_format", sql`${table.verifier} ~ '^[0-9a-f]{64}$'`),
+    check("recovery_capability_purpose_test_only", sql`${table.purpose} = 'synthetic_test'`),
+    check("recovery_capability_scope_test_only", sql`${table.scope} = 'recovery_state_only'`),
+  ],
+);
+
+export const recoveryAuditEvent = pgTable(
+  "recovery_audit_event",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").references(() => user.id, { onDelete: "set null" }),
+    attemptId: text("attempt_id"),
+    event: text("event").notNull(),
+    outcome: text("outcome").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("recovery_audit_user_time_idx").on(table.userId, table.createdAt),
+    check(
+      "recovery_audit_event_allowed",
+      sql`${table.event} IN ('code_set_issued', 'redemption_attempted', 'capability_used', 'code_set_revoked')`,
+    ),
+    check(
+      "recovery_audit_outcome_allowed",
+      sql`${table.outcome} IN ('issued', 'invalid_proof', 'invalid_code', 'rate_limited', 'redeemed', 'replay', 'used', 'revoked', 'key_unavailable')`,
     ),
   ],
 );

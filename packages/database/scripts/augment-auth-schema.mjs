@@ -17,7 +17,9 @@ try {
       .filter(Boolean),
   );
   pgCoreNames.add("check");
+  pgCoreNames.add("foreignKey");
   pgCoreNames.add("uniqueIndex");
+  pgCoreNames.add("unique");
   generated = generated.replace(
     pgCoreImport[0],
     `import {\n  ${[...pgCoreNames].sort().join(",\n  ")},\n} from "drizzle-orm/pg-core";`,

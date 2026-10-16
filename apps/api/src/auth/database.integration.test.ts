@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomInt, randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { createDatabase } from "@mizvo/database";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -10,12 +10,14 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildApp } from "../app.js";
 import { createAuth } from "./auth.js";
 import { createPostgresOtpRateLimiter } from "./otp-rate-limit.js";
+import { currentOwnerSensitiveActionDecision } from "./owner-sensitive-action-guard.js";
 import {
   acceptPhoneInvitation,
   createPhoneInvitation,
   revokePhoneInvitation,
 } from "./phone-invitations.js";
 import { requireVerifiedPasskeyEnrollment } from "./plugins.js";
+import { createRecoveryCodeTestService } from "./recovery-codes.js";
 import type { SmsTransport } from "./sms.js";
 
 type RegistrationResponse = {
@@ -182,7 +184,7 @@ postgresSuite("authentication PostgreSQL invariants", () => {
 
   beforeEach(async () => {
     deliveries.length = 0;
-    await client`TRUNCATE TABLE "business_audit_event", "phone_invitation", "invitation", "member", "organization", "session", "account", "verification", "rate_limit", "user" CASCADE`;
+    await client`TRUNCATE TABLE "recovery_audit_event", "recovery_capability", "recovery_attempt", "recovery_code", "recovery_code_set", "business_audit_event", "phone_invitation", "invitation", "member", "organization", "session", "account", "verification", "rate_limit", "user" CASCADE`;
   });
 
   afterAll(async () => {
@@ -219,6 +221,38 @@ postgresSuite("authentication PostgreSQL invariants", () => {
       },
       { smsTransport },
     );
+  }
+
+  function createRecoveryTestService(
+    options: {
+      keyVersion?: string;
+      key?: Buffer;
+      keyring?: Readonly<Record<string, Buffer>>;
+      maxAttempts?: number;
+      verifyPhoneOtpReceipt?: (receipt: string, userId: string) => Promise<boolean>;
+    } = {},
+  ) {
+    const keyVersion = options.keyVersion ?? "test-v1";
+    const key = options.key ?? Buffer.alloc(32, 0x51);
+    return createRecoveryCodeTestService({
+      client,
+      keyring: options.keyring ?? { [keyVersion]: key },
+      activeKeyVersion: keyVersion,
+      rateLimit: { maxAttempts: options.maxAttempts ?? 20, windowMs: 5 * 60_000 },
+      verifyPhoneOtpReceipt:
+        options.verifyPhoneOtpReceipt ??
+        (async (receipt, userId) => receipt === `verified-test-otp:${userId}`),
+    });
+  }
+
+  async function createSyntheticRecoveryUser(phoneVerified = true) {
+    const id = `synthetic-${randomUUID()}`;
+    const phoneNumber = `+234${randomInt(1_000_000_000, 9_999_999_999)}`;
+    await client`
+      INSERT INTO "user" ("id", "name", "email", "email_verified", "phone_number", "phone_number_verified")
+      VALUES (${id}, 'Synthetic Recovery User', ${`${id}@users.invalid`}, false, ${phoneNumber}, ${phoneVerified})
+    `;
+    return id;
   }
 
   async function registerThroughApp(app: ReturnType<typeof buildApp>, phoneNumber: string) {
@@ -279,6 +313,316 @@ postgresSuite("authentication PostgreSQL invariants", () => {
     }
     return { organizationId, users };
   }
+
+  it("issues only high-entropy synthetic recovery codes and persists keyed verifiers", async () => {
+    const userId = await createSyntheticRecoveryUser();
+    const service = createRecoveryTestService();
+    const issued = await service.issueForSyntheticTest(userId, 8);
+
+    expect(issued.epoch).toBe(1);
+    expect(issued.codes).toHaveLength(8);
+    for (const code of issued.codes) {
+      expect(code).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(Buffer.from(code, "base64url")).toHaveLength(32);
+    }
+    const stored = await client`
+      SELECT code."verifier", code."key_version", code_set."provenance"
+      FROM "recovery_code" code
+      JOIN "recovery_code_set" code_set ON code_set."id" = code."set_id"
+      WHERE code."user_id" = ${userId}
+    `;
+    expect(stored).toHaveLength(8);
+    expect(stored.every((row) => /^[0-9a-f]{64}$/.test(String(row.verifier)))).toBe(true);
+    expect(
+      stored.every((row) => row.key_version === "test-v1" && row.provenance === "synthetic_test"),
+    ).toBe(true);
+    const audit =
+      await client`SELECT "event", "outcome" FROM "recovery_audit_event" WHERE "user_id" = ${userId}`;
+    const serializedAudit = JSON.stringify(audit);
+    for (const code of issued.codes) expect(serializedAudit).not.toContain(code);
+    expect(serializedAudit).not.toContain("verified-test-otp");
+  });
+
+  it("rejects wrong codes, other accounts and invalid phone proofs without consuming a code", async () => {
+    const userId = await createSyntheticRecoveryUser();
+    const otherUserId = await createSyntheticRecoveryUser();
+    const service = createRecoveryTestService();
+    const issued = await service.issueForSyntheticTest(userId, 2);
+    const expiresAt = new Date(Date.now() + 60_000);
+    const wrongCode = await service.redeemForSyntheticTest({
+      userId,
+      attemptId: randomUUID(),
+      code: "A".repeat(43),
+      otpReceipt: `verified-test-otp:${userId}`,
+      capabilityExpiresAt: expiresAt,
+    });
+    const wrongAccount = await service.redeemForSyntheticTest({
+      userId: otherUserId,
+      attemptId: randomUUID(),
+      code: issued.codes[0] as string,
+      otpReceipt: `verified-test-otp:${otherUserId}`,
+      capabilityExpiresAt: expiresAt,
+    });
+    const wrongOtp = await service.redeemForSyntheticTest({
+      userId,
+      attemptId: randomUUID(),
+      code: issued.codes[0] as string,
+      otpReceipt: "unverified-test-otp",
+      capabilityExpiresAt: expiresAt,
+    });
+    expect(wrongCode).toEqual({ accepted: false, reason: "invalid" });
+    expect(wrongAccount).toEqual({ accepted: false, reason: "invalid" });
+    expect(wrongOtp).toEqual({ accepted: false, reason: "invalid" });
+    const valid = await service.redeemForSyntheticTest({
+      userId,
+      attemptId: randomUUID(),
+      code: issued.codes[0] as string,
+      otpReceipt: `verified-test-otp:${userId}`,
+      capabilityExpiresAt: expiresAt,
+    });
+    expect(valid.accepted).toBe(true);
+  });
+
+  it("redeems once, creates only a bound test capability and leaves sessions and membership unchanged", async () => {
+    const userId = await createSyntheticRecoveryUser();
+    await client`INSERT INTO "organization" ("id", "name", "slug", "created_at") VALUES ('recovery-org', 'Recovery test business', 'recovery-test-business', now())`;
+    await client`INSERT INTO "member" ("id", "organization_id", "user_id", "role", "created_at") VALUES ('recovery-member', 'recovery-org', ${userId}, 'owner', now())`;
+    await client`INSERT INTO "session" ("id", "expires_at", "token", "created_at", "updated_at", "user_id") VALUES ('recovery-session', now() + interval '1 day', 'recovery-session-token', now(), now(), ${userId})`;
+    const service = createRecoveryTestService();
+    const issued = await service.issueForSyntheticTest(userId, 1);
+    const before = await client`
+      SELECT (SELECT count(*)::int FROM "session" WHERE "user_id" = ${userId}) AS sessions,
+             (SELECT count(*)::int FROM "member" WHERE "user_id" = ${userId}) AS memberships
+    `;
+    const attemptId = randomUUID();
+    const expiresAt = new Date(Date.now() + 60_000);
+    const redeemed = await service.redeemForSyntheticTest({
+      userId,
+      attemptId,
+      code: issued.codes[0] as string,
+      otpReceipt: `verified-test-otp:${userId}`,
+      capabilityExpiresAt: expiresAt,
+    });
+    expect(redeemed.accepted).toBe(true);
+    if (!redeemed.accepted) throw new Error("Expected synthetic recovery redemption");
+    const persistedCapability = await client`
+      SELECT "user_id", "attempt_id", "purpose", "scope", "verifier", "key_version"
+      FROM "recovery_capability" WHERE "id" = ${redeemed.capabilityId}
+    `;
+    expect(persistedCapability[0]?.user_id).toBe(userId);
+    expect(persistedCapability[0]?.attempt_id).toBe(attemptId);
+    expect(persistedCapability[0]?.scope).toBe("recovery_state_only");
+    expect(persistedCapability[0]?.verifier).not.toBe(redeemed.capabilityToken);
+    expect(JSON.stringify(persistedCapability)).not.toContain(redeemed.capabilityToken);
+    const safeAudit =
+      await client`SELECT "event", "outcome" FROM "recovery_audit_event" WHERE "user_id" = ${userId}`;
+    expect(JSON.stringify(safeAudit)).not.toContain(redeemed.capabilityToken);
+    expect(
+      await service.inspectRestrictedTestCapability({
+        capabilityId: redeemed.capabilityId,
+        capabilityToken: redeemed.capabilityToken,
+        userId,
+        attemptId,
+      }),
+    ).toBe(true);
+    expect(
+      await service.inspectRestrictedTestCapability({
+        capabilityId: redeemed.capabilityId,
+        capabilityToken: redeemed.capabilityToken,
+        userId: "another-user",
+        attemptId,
+      }),
+    ).toBe(false);
+    expect(
+      await service.inspectRestrictedTestCapability({
+        capabilityId: redeemed.capabilityId,
+        capabilityToken: "C".repeat(43),
+        userId,
+        attemptId,
+      }),
+    ).toBe(false);
+    expect(
+      await service.inspectRestrictedTestCapability({
+        capabilityId: redeemed.capabilityId,
+        capabilityToken: redeemed.capabilityToken,
+        userId,
+        attemptId,
+        now: new Date(expiresAt.getTime() + 1),
+      }),
+    ).toBe(false);
+    expect(
+      await service.consumeRestrictedTestCapability({
+        capabilityId: redeemed.capabilityId,
+        capabilityToken: redeemed.capabilityToken,
+        userId,
+        attemptId,
+      }),
+    ).toBe(true);
+    expect(
+      await service.consumeRestrictedTestCapability({
+        capabilityId: redeemed.capabilityId,
+        capabilityToken: redeemed.capabilityToken,
+        userId,
+        attemptId,
+      }),
+    ).toBe(false);
+    const replay = await service.redeemForSyntheticTest({
+      userId,
+      attemptId: randomUUID(),
+      code: issued.codes[0] as string,
+      otpReceipt: `verified-test-otp:${userId}`,
+      capabilityExpiresAt: expiresAt,
+    });
+    expect(replay).toEqual({ accepted: false, reason: "invalid" });
+    const after = await client`
+      SELECT (SELECT count(*)::int FROM "session" WHERE "user_id" = ${userId}) AS sessions,
+             (SELECT count(*)::int FROM "member" WHERE "user_id" = ${userId}) AS memberships
+    `;
+    expect(after).toEqual(before);
+    expect(await currentOwnerSensitiveActionDecision(userId)).toEqual({
+      allowed: false,
+      reason: "independent_recovery_required",
+    });
+  });
+
+  it("allows exactly one PostgreSQL redemption when attempts race", async () => {
+    const userId = await createSyntheticRecoveryUser();
+    const service = createRecoveryTestService();
+    const issued = await service.issueForSyntheticTest(userId, 1);
+    const results = await Promise.all(
+      Array.from({ length: 8 }, () =>
+        service.redeemForSyntheticTest({
+          userId,
+          attemptId: randomUUID(),
+          code: issued.codes[0] as string,
+          otpReceipt: `verified-test-otp:${userId}`,
+          capabilityExpiresAt: new Date(Date.now() + 60_000),
+        }),
+      ),
+    );
+    expect(results.filter((result) => result.accepted)).toHaveLength(1);
+    expect(results.filter((result) => !result.accepted)).toHaveLength(7);
+    const consumed =
+      await client`SELECT count(*)::int AS count FROM "recovery_code" WHERE "user_id" = ${userId} AND "consumed_at" IS NOT NULL`;
+    expect(consumed[0]?.count).toBe(1);
+  });
+
+  it("rejects repeated attempt IDs and applies explicit account rate limits", async () => {
+    const userId = await createSyntheticRecoveryUser();
+    const service = createRecoveryTestService({ maxAttempts: 2 });
+    const issued = await service.issueForSyntheticTest(userId, 1);
+    const attemptId = randomUUID();
+    const redeem = (id: string, code: string) =>
+      service.redeemForSyntheticTest({
+        userId,
+        attemptId: id,
+        code,
+        otpReceipt: `verified-test-otp:${userId}`,
+        capabilityExpiresAt: new Date(Date.now() + 60_000),
+      });
+    expect(await redeem(attemptId, "B".repeat(43))).toEqual({ accepted: false, reason: "invalid" });
+    expect(await redeem(attemptId, issued.codes[0] as string)).toEqual({
+      accepted: false,
+      reason: "invalid",
+    });
+    expect(await redeem(randomUUID(), "B".repeat(43))).toEqual({
+      accepted: false,
+      reason: "rate_limited",
+    });
+  });
+
+  it("invalidates earlier code sets and outstanding capabilities when the synthetic set rotates", async () => {
+    const userId = await createSyntheticRecoveryUser();
+    const service = createRecoveryTestService();
+    const first = await service.issueForSyntheticTest(userId, 1);
+    const firstRedemption = await service.redeemForSyntheticTest({
+      userId,
+      attemptId: randomUUID(),
+      code: first.codes[0] as string,
+      otpReceipt: `verified-test-otp:${userId}`,
+      capabilityExpiresAt: new Date(Date.now() + 60_000),
+    });
+    if (!firstRedemption.accepted) throw new Error("Expected test capability");
+    const second = await service.issueForSyntheticTest(userId, 1);
+    expect(second.epoch).toBe(first.epoch + 1);
+    expect(
+      await service.inspectRestrictedTestCapability({
+        capabilityId: firstRedemption.capabilityId,
+        capabilityToken: firstRedemption.capabilityToken,
+        userId,
+        attemptId: String(
+          (
+            await client`SELECT "attempt_id" FROM "recovery_capability" WHERE "id" = ${firstRedemption.capabilityId}`
+          )[0]?.attempt_id,
+        ),
+      }),
+    ).toBe(false);
+    expect(
+      await service.redeemForSyntheticTest({
+        userId,
+        attemptId: randomUUID(),
+        code: first.codes[0] as string,
+        otpReceipt: `verified-test-otp:${userId}`,
+        capabilityExpiresAt: new Date(Date.now() + 60_000),
+      }),
+    ).toEqual({ accepted: false, reason: "invalid" });
+    expect(await service.revokeCodeSetsForSyntheticTest(userId)).toBe(1);
+    expect(
+      await service.redeemForSyntheticTest({
+        userId,
+        attemptId: randomUUID(),
+        code: second.codes[0] as string,
+        otpReceipt: `verified-test-otp:${userId}`,
+        capabilityExpiresAt: new Date(Date.now() + 60_000),
+      }),
+    ).toEqual({ accepted: false, reason: "invalid" });
+  });
+
+  it("fails closed when a verifier key is absent or its pepper value is corrupted", async () => {
+    const userId = await createSyntheticRecoveryUser();
+    const oldKey = Buffer.alloc(32, 0x11);
+    const issuedByOldKey = createRecoveryTestService({ keyVersion: "key-v1", key: oldKey });
+    const issued = await issuedByOldKey.issueForSyntheticTest(userId, 1);
+    const input = {
+      userId,
+      attemptId: randomUUID(),
+      code: issued.codes[0] as string,
+      otpReceipt: `verified-test-otp:${userId}`,
+      capabilityExpiresAt: new Date(Date.now() + 60_000),
+    };
+    const missingKey = createRecoveryTestService({
+      keyVersion: "key-v2",
+      key: Buffer.alloc(32, 0x22),
+    });
+    expect(await missingKey.redeemForSyntheticTest(input)).toEqual({
+      accepted: false,
+      reason: "invalid",
+    });
+    const corruptKey = createRecoveryTestService({
+      keyVersion: "key-v1",
+      key: Buffer.alloc(32, 0x33),
+    });
+    expect(await corruptKey.redeemForSyntheticTest({ ...input, attemptId: randomUUID() })).toEqual({
+      accepted: false,
+      reason: "invalid",
+    });
+    const unused =
+      await client`SELECT "consumed_at" FROM "recovery_code" WHERE "user_id" = ${userId}`;
+    expect(unused[0]?.consumed_at).toBeNull();
+  });
+
+  it("requires a verified existing synthetic phone account for issuance", async () => {
+    const userId = await createSyntheticRecoveryUser(false);
+    const service = createRecoveryTestService();
+    await expect(service.issueForSyntheticTest(userId, 1)).rejects.toThrow(
+      "Synthetic verified account required",
+    );
+    expect(
+      (
+        await client`SELECT count(*)::int AS count FROM "recovery_code_set" WHERE "user_id" = ${userId}`
+      )[0]?.count,
+    ).toBe(0);
+  });
 
   it("rejects deleting or demoting the last owner", async () => {
     const { users } = await seedBusiness();
@@ -688,6 +1032,7 @@ postgresSuite("authentication PostgreSQL invariants", () => {
         BETTER_AUTH_TRUSTED_ORIGINS: "https://app.mizvo.test",
         // Even a mistakenly enabled feature flag must not activate production routes.
         MIZVO_PASSKEY_ENROLLMENT: "development",
+        MIZVO_RECOVERY_CODES: "development",
         NODE_ENV: "production",
       },
       { smsTransport },
@@ -701,6 +1046,12 @@ postgresSuite("authentication PostgreSQL invariants", () => {
       ["POST", "/api/auth/passkey/delete-passkey"],
       ["POST", "/api/auth/passkey/update-passkey"],
       ["POST", "/api/auth/passkey/future-unreviewed-endpoint"],
+      ["GET", "/api/recovery-codes"],
+      ["POST", "/api/recovery-codes/issue"],
+      ["POST", "/api/recovery-codes/redeem"],
+      ["POST", "/api/auth/recovery-code/issue"],
+      ["POST", "/api/auth/recovery-code/redeem"],
+      ["POST", "/api/auth/phone-invitations"],
     ] as const;
     try {
       for (const [method, url] of routes) {
@@ -708,6 +1059,7 @@ postgresSuite("authentication PostgreSQL invariants", () => {
           method,
           url,
           payload: method === "POST" ? {} : undefined,
+          headers: { origin: "https://app.mizvo.test" },
         });
         expect(response.statusCode, `${method} ${url}`).toBe(404);
       }
