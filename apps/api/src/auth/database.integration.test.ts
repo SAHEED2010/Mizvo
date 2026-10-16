@@ -1873,35 +1873,37 @@ postgresSuite("authentication PostgreSQL invariants", () => {
         }),
       ).rejects.toMatchObject({ code: "invalid_action" });
 
-      expect(await stepUp.consumeProof(proof.proofId, { ...scope, target: "other-target" })).toBe(
-        false,
-      );
+      const bindingProof = await (await assertionFor()).result();
+      if (!bindingProof) throw new Error("Expected a fresh proof for scope-binding tests");
       expect(
-        await stepUp.consumeProof(proof.proofId, {
+        await stepUp.consumeProof(bindingProof.proofId, { ...scope, target: "other-target" }),
+      ).toBe(false);
+      expect(
+        await stepUp.consumeProof(bindingProof.proofId, {
           ...scope,
           action: "business.member.remove",
         }),
       ).toBe(false);
       expect(
-        await stepUp.consumeProof(proof.proofId, {
+        await stepUp.consumeProof(bindingProof.proofId, {
           ...scope,
           businessId: "another-business-id",
         }),
       ).toBe(false);
       expect(
-        await stepUp.consumeProof(proof.proofId, {
+        await stepUp.consumeProof(bindingProof.proofId, {
           ...scope,
           sessionId: "another-session-id",
         }),
       ).toBe(false);
       expect(
-        await stepUp.consumeProof(proof.proofId, {
+        await stepUp.consumeProof(bindingProof.proofId, {
           ...scope,
           userId: "another-user-id",
         }),
       ).toBe(false);
-      expect(await stepUp.consumeProof(proof.proofId, scope)).toBe(true);
-      expect(await stepUp.consumeProof(proof.proofId, scope)).toBe(false);
+      expect(await stepUp.consumeProof(bindingProof.proofId, scope)).toBe(true);
+      expect(await stepUp.consumeProof(bindingProof.proofId, scope)).toBe(false);
       expect(await successfulAssertion.result()).toBeNull();
       expect(await currentOwnerSensitiveActionDecision(userId as string)).toEqual({
         allowed: false,
