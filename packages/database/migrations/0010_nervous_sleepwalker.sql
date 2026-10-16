@@ -1,0 +1,4 @@
+ALTER TABLE "step_up_challenge" DROP CONSTRAINT "step_up_challenge_action_allowed";--> statement-breakpoint
+ALTER TABLE "step_up_proof" DROP CONSTRAINT "step_up_proof_action_allowed";--> statement-breakpoint
+ALTER TABLE "step_up_challenge" ADD CONSTRAINT "step_up_challenge_action_allowed" CHECK ("step_up_challenge"."action" IN ('business.invitation.create', 'business.invitation.revoke', 'business.member.remove', 'business.member.role_change'));--> statement-breakpoint
+ALTER TABLE "step_up_proof" ADD CONSTRAINT "step_up_proof_action_allowed" CHECK ("step_up_proof"."action" IN ('business.invitation.create', 'business.invitation.revoke', 'business.member.remove', 'business.member.role_change'));

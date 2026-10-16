@@ -506,7 +506,7 @@ export const stepUpChallenge = pgTable(
     check("step_up_challenge_target_digest_format", sql`${table.targetDigest} ~ '^[0-9a-f]{64}$'`),
     check(
       "step_up_challenge_action_allowed",
-      sql`${table.action} IN ('business.invitation.create', 'business.member.remove', 'business.member.role_change')`,
+      sql`${table.action} IN ('business.invitation.create', 'business.invitation.revoke', 'business.member.remove', 'business.member.role_change')`,
     ),
     check(
       "step_up_challenge_role_allowed",
@@ -570,7 +570,7 @@ export const stepUpProof = pgTable(
     check("step_up_proof_target_digest_format", sql`${table.targetDigest} ~ '^[0-9a-f]{64}$'`),
     check(
       "step_up_proof_action_allowed",
-      sql`${table.action} IN ('business.invitation.create', 'business.member.remove', 'business.member.role_change')`,
+      sql`${table.action} IN ('business.invitation.create', 'business.invitation.revoke', 'business.member.remove', 'business.member.role_change')`,
     ),
     check(
       "step_up_proof_role_allowed",

@@ -21,6 +21,7 @@ import {
   revokePhoneInvitation,
 } from "./phone-invitations.js";
 import { requireVerifiedPasskeyEnrollment } from "./plugins.js";
+import { createProtectedActionTestHarness } from "./protected-action-test-harness.js";
 import { createRecoveryCodeTestService } from "./recovery-codes.js";
 import type { SmsTransport } from "./sms.js";
 import { createStepUpTestService } from "./step-up-test-service.js";
@@ -965,6 +966,12 @@ postgresSuite("authentication PostgreSQL invariants", () => {
     ).rejects.toMatchObject({ code: "invalid_invitation" });
     await client`UPDATE "user" SET "phone_number_verified" = true WHERE "id" = ${users[1]}`;
 
+    const recipientMembershipBeforeAcceptance = await client`
+      SELECT "role" FROM "member"
+      WHERE "organization_id" = ${organizationId} AND "user_id" = ${users[1]}
+    `;
+    expect(recipientMembershipBeforeAcceptance).toEqual([]);
+
     const [stillPending] =
       await client`SELECT "status" FROM "phone_invitation" WHERE "id" = ${invitation.invitationId}`;
     expect(stillPending?.status).toBe("pending");
@@ -1721,6 +1728,126 @@ postgresSuite("authentication PostgreSQL invariants", () => {
         lifetime_ms: 10 * 60_000,
       });
       expect(new Date(proof.expiresAt).getTime() - Date.now()).toBeLessThanOrEqual(10 * 60_000);
+
+      // C3d exercises proof validation and a synthetic action effect in one
+      // postgres.js transaction. It intentionally does not call C2's
+      // Better Auth adapter service because the two transaction owners cannot
+      // currently share one connection/commit boundary.
+      const harnessProof = await assertionFor();
+      const harnessEvidence = await harnessProof.result();
+      if (!harnessEvidence) throw new Error("Expected C3d harness proof");
+      const reservedClient = await client.reserve();
+      try {
+        await reservedClient`CREATE TEMP TABLE "c3d_test_action_effect" ("target" text PRIMARY KEY) ON COMMIT PRESERVE ROWS`;
+        const harness = createProtectedActionTestHarness({
+          client: reservedClient,
+          proofConsumer: stepUp,
+        });
+        const wrongTarget = await harness.authorizeAndRun({
+          proofId: harnessEvidence.proofId,
+          scope: { ...scope, target: "different-invitation-target" },
+          action: async () => "must-not-run",
+        });
+        expect(wrongTarget).toEqual({ allowed: false });
+        const wrongBusiness = await harness.authorizeAndRun({
+          proofId: harnessEvidence.proofId,
+          scope: { ...scope, businessId: "different-business" },
+          action: async () => "must-not-run",
+        });
+        expect(wrongBusiness).toEqual({ allowed: false });
+        const wrongSession = await harness.authorizeAndRun({
+          proofId: harnessEvidence.proofId,
+          scope: { ...scope, sessionId: "different-session" },
+          action: async () => "must-not-run",
+        });
+        expect(wrongSession).toEqual({ allowed: false });
+        await expect(
+          harness.authorizeAndRun({
+            proofId: harnessEvidence.proofId,
+            scope,
+            action: async (tx) => {
+              await tx`INSERT INTO "c3d_test_action_effect" ("target") VALUES (${scope.target})`;
+              throw new Error("synthetic mutation failure");
+            },
+          }),
+        ).rejects.toThrow("synthetic mutation failure");
+        const rolledBackEffect = await reservedClient`
+          SELECT "target" FROM "c3d_test_action_effect" WHERE "target" = ${scope.target}
+        `;
+        expect(rolledBackEffect).toEqual([]);
+        const retry = await harness.authorizeAndRun({
+          proofId: harnessEvidence.proofId,
+          scope,
+          action: async (tx) => {
+            await tx`INSERT INTO "c3d_test_action_effect" ("target") VALUES (${scope.target})`;
+            return "committed";
+          },
+        });
+        expect(retry).toEqual({ allowed: true, result: "committed" });
+        const revokeScope = {
+          ...scope,
+          action: "business.invitation.revoke",
+          target: "synthetic-pending-invitation-id",
+        };
+        const revokeEvidence = await (await assertionFor(revokeScope)).result();
+        if (!revokeEvidence) throw new Error("Expected exact invitation-revocation proof");
+        const revokeResult = await harness.authorizeAndRun({
+          proofId: revokeEvidence.proofId,
+          scope: revokeScope,
+          action: async (tx) => {
+            await tx`INSERT INTO "c3d_test_action_effect" ("target") VALUES (${revokeScope.target})`;
+            return "revocation-effect-committed";
+          },
+        });
+        expect(revokeResult).toEqual({ allowed: true, result: "revocation-effect-committed" });
+        const replay = await harness.authorizeAndRun({
+          proofId: harnessEvidence.proofId,
+          scope,
+          action: async () => "must-not-run",
+        });
+        expect(replay).toEqual({ allowed: false });
+      } finally {
+        await reservedClient`DROP TABLE IF EXISTS "c3d_test_action_effect"`;
+        await reservedClient.release();
+      }
+
+      const concurrentEvidence = await (await assertionFor()).result();
+      if (!concurrentEvidence) throw new Error("Expected concurrent harness proof");
+      const pooledHarness = createProtectedActionTestHarness({
+        client,
+        proofConsumer: stepUp,
+      });
+      const claims = await Promise.all(
+        Array.from({ length: 3 }, () =>
+          pooledHarness.authorizeAndRun({
+            proofId: concurrentEvidence.proofId,
+            scope,
+            action: async () => true,
+          }),
+        ),
+      );
+      expect(claims.filter((claim) => claim.allowed)).toHaveLength(1);
+
+      const originalNodeEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = "production";
+      try {
+        expect(() => createProtectedActionTestHarness({ client, proofConsumer: stepUp })).toThrow(
+          /configuration/i,
+        );
+      } finally {
+        process.env.NODE_ENV = originalNodeEnv;
+      }
+      await expect(
+        createProtectedActionTestHarness({
+          client,
+          proofConsumer: stepUp,
+        }).authorizeAndRun({
+          proofId: proof.proofId,
+          scope: { ...scope, action: "business.member.remove" },
+          action: async () => "must-not-run",
+        }),
+      ).rejects.toMatchObject({ code: "invalid_action" });
+
       expect(await stepUp.consumeProof(proof.proofId, { ...scope, target: "other-target" })).toBe(
         false,
       );

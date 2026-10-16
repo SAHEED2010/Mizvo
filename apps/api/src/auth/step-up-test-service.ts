@@ -16,17 +16,20 @@ const CHALLENGE_RATE_WINDOW_MS = 5 * 60_000;
 const CHALLENGE_RATE_MAX = 30;
 const ALLOWED_ACTIONS = new Set([
   "business.invitation.create",
+  "business.invitation.revoke",
   "business.member.remove",
   "business.member.role_change",
 ]);
 
-type Scope = {
+export type StepUpTestScope = {
   userId: string;
   sessionId: string;
   businessId: string;
   action: string;
   target: string;
 };
+
+type Scope = StepUpTestScope;
 
 type Challenge = {
   id: string;
@@ -478,16 +481,19 @@ export function createStepUpTestService(options: { client: Sql }) {
     });
   }
 
-  /** Atomically consumes proof only for its original live session and exact action target. */
-  async function consumeProof(proofId: string, scope: Scope): Promise<boolean> {
+  /** Consume proof using a caller-owned transaction from this isolated test database. */
+  async function consumeProofInTransaction(
+    tx: TransactionSql,
+    proofId: string,
+    scope: Scope,
+  ): Promise<boolean> {
     if (!isScopeValid(scope)) return false;
-    await assertIsolatedTestDatabase(client, client);
+    await assertIsolatedTestDatabase(client, tx);
     const digest = targetDigest(scope.target);
-    return client.begin(async (tx) => {
-      // Match C3b's per-user serialization so recovery-state changes cannot
-      // race evidence redemption.
-      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${scope.userId}, 0))`;
-      const rows = await tx`
+    // Match C3b's per-user serialization so recovery-state changes cannot
+    // race evidence redemption.
+    await tx`SELECT pg_advisory_xact_lock(hashtextextended(${scope.userId}, 0))`;
+    const rows = await tx`
         SELECT proof."id", proof."challenge_id", proof."user_id", proof."session_id", proof."business_id",
           proof."credential_id", proof."credential_fingerprint", proof."credential_counter",
           proof."membership_role", proof."action", proof."target_digest", proof."security_epoch",
@@ -516,79 +522,85 @@ export function createStepUpTestService(options: { client: Sql }) {
         WHERE proof."id" = ${proofId} AND proof."user_id" = ${scope.userId}
         FOR UPDATE OF proof, identity, auth_session, membership, credential
       `;
-      const proof = rows[0] as
-        | (Record<string, unknown> & {
-            id: string;
-            user_id: string;
-            business_id: string;
-            session_id: string;
-            credential_fingerprint: string;
-            credential_counter: number;
-            membership_role: string;
-            action: string;
-            target_digest: string;
-            security_epoch: number;
-            recovery_activity_count: number;
-            issued_at_utc_ms: number;
-            expires_at_utc_ms: number;
-            consumed_at: Date | string | null;
-            public_key: string;
-            current_counter: number;
-            current_security_epoch: number;
-            session_expires_at_utc_ms: number;
-            phone_number_verified: boolean | null;
-            email_verified: boolean;
-            current_role: string;
-            current_recovery_activity_count: number;
-          })
-        | undefined;
-      const valid = Boolean(
-        proof &&
-          proof.session_id === scope.sessionId &&
-          proof.business_id === scope.businessId &&
-          proof.action === scope.action &&
-          proof.target_digest === digest &&
-          proof.consumed_at === null &&
-          proof.issued_at_utc_ms <= Date.now() &&
-          proof.issued_at_utc_ms >= Date.now() - PROOF_LIFETIME_MS &&
-          proof.expires_at_utc_ms > Date.now() &&
-          proof.session_expires_at_utc_ms > Date.now() &&
-          proof.phone_number_verified === true &&
-          proof.email_verified === false &&
-          proof.current_role === proof.membership_role &&
-          proof.current_role === "owner" &&
-          proof.current_counter === proof.credential_counter &&
-          proof.current_security_epoch === proof.security_epoch &&
-          proof.current_recovery_activity_count === proof.recovery_activity_count &&
-          credentialFingerprint(proof.public_key) === proof.credential_fingerprint,
-      );
-      if (proof && valid) {
-        const consumed = await tx`
+    const proof = rows[0] as
+      | (Record<string, unknown> & {
+          id: string;
+          user_id: string;
+          business_id: string;
+          session_id: string;
+          credential_fingerprint: string;
+          credential_counter: number;
+          membership_role: string;
+          action: string;
+          target_digest: string;
+          security_epoch: number;
+          recovery_activity_count: number;
+          issued_at_utc_ms: number;
+          expires_at_utc_ms: number;
+          consumed_at: Date | string | null;
+          public_key: string;
+          current_counter: number;
+          current_security_epoch: number;
+          session_expires_at_utc_ms: number;
+          phone_number_verified: boolean | null;
+          email_verified: boolean;
+          current_role: string;
+          current_recovery_activity_count: number;
+        })
+      | undefined;
+    const valid = Boolean(
+      proof &&
+        proof.session_id === scope.sessionId &&
+        proof.business_id === scope.businessId &&
+        proof.action === scope.action &&
+        proof.target_digest === digest &&
+        proof.consumed_at === null &&
+        proof.issued_at_utc_ms <= Date.now() &&
+        proof.issued_at_utc_ms >= Date.now() - PROOF_LIFETIME_MS &&
+        proof.expires_at_utc_ms > Date.now() &&
+        proof.session_expires_at_utc_ms > Date.now() &&
+        proof.phone_number_verified === true &&
+        proof.email_verified === false &&
+        proof.current_role === proof.membership_role &&
+        proof.current_role === "owner" &&
+        proof.current_counter === proof.credential_counter &&
+        proof.current_security_epoch === proof.security_epoch &&
+        proof.current_recovery_activity_count === proof.recovery_activity_count &&
+        credentialFingerprint(proof.public_key) === proof.credential_fingerprint,
+    );
+    if (proof && valid) {
+      const consumed = await tx`
           UPDATE "step_up_proof" SET "consumed_at" = now()
           WHERE "id" = ${proof.id} AND "consumed_at" IS NULL
           RETURNING "id"
         `;
-        if (consumed.length !== 1) return false;
-        await recordAudit(
-          tx,
-          { userId: proof.user_id, businessId: proof.business_id },
-          proof.credential_fingerprint,
-          "proof_consumed",
-          "consumed",
-        );
-        return true;
-      }
-      if (proof) {
-        await recordAudit(
-          tx,
-          { userId: proof.user_id, businessId: proof.business_id },
-          proof.credential_fingerprint,
-          "proof_consumed",
-          proof.consumed_at ? "replayed" : "stale",
-        );
-      }
-      return false;
-    });
+      if (consumed.length !== 1) return false;
+      await recordAudit(
+        tx,
+        { userId: proof.user_id, businessId: proof.business_id },
+        proof.credential_fingerprint,
+        "proof_consumed",
+        "consumed",
+      );
+      return true;
+    }
+    if (proof) {
+      await recordAudit(
+        tx,
+        { userId: proof.user_id, businessId: proof.business_id },
+        proof.credential_fingerprint,
+        "proof_consumed",
+        proof.consumed_at ? "replayed" : "stale",
+      );
+    }
+    return false;
+  }
+
+  /** Atomically consumes proof only for its original live session and exact action target. */
+  async function consumeProof(proofId: string, scope: Scope): Promise<boolean> {
+    if (!isScopeValid(scope)) return false;
+    await assertIsolatedTestDatabase(client, client);
+    return client.begin((tx) => consumeProofInTransaction(tx, proofId, scope));
   }
 
   /** Test hook simulating a security-event epoch change; not a production API. */
@@ -602,5 +614,11 @@ export function createStepUpTestService(options: { client: Sql }) {
     return rows[0]?.security_epoch ?? null;
   }
 
-  return { startChallenge, verifyAssertion, consumeProof, advanceSyntheticSecurityEpoch };
+  return {
+    startChallenge,
+    verifyAssertion,
+    consumeProof,
+    consumeProofInTransaction,
+    advanceSyntheticSecurityEpoch,
+  };
 }
