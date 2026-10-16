@@ -1740,7 +1740,8 @@ postgresSuite("authentication PostgreSQL invariants", () => {
       try {
         await reservedClient`CREATE TEMP TABLE "c3d_test_action_effect" ("target" text PRIMARY KEY) ON COMMIT PRESERVE ROWS`;
         const harness = createProtectedActionTestHarness({
-          client: reservedClient,
+          client,
+          transactionClient: reservedClient,
           proofConsumer: stepUp,
         });
         const wrongTarget = await harness.authorizeAndRun({

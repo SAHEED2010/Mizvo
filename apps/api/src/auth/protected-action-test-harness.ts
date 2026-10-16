@@ -25,8 +25,10 @@ export type TestProofConsumer = {
  */
 export function createProtectedActionTestHarness(options: {
   client: Sql;
+  transactionClient?: Sql;
   proofConsumer: TestProofConsumer;
 }) {
+  const transactionClient = options.transactionClient ?? options.client;
   const { database, host, path } = options.client.options;
   if (
     process.env.NODE_ENV !== "test" ||
@@ -51,7 +53,7 @@ export function createProtectedActionTestHarness(options: {
       throw new ProtectedActionTestHarnessError("configuration");
     }
 
-    return options.client.begin(async (tx) => {
+    return transactionClient.begin(async (tx) => {
       const transactionDatabase = await tx`SELECT current_database() AS database`;
       if (transactionDatabase[0]?.database !== "mizvo_test") {
         throw new ProtectedActionTestHarnessError("configuration");
