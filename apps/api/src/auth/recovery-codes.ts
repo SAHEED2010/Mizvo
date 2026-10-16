@@ -38,11 +38,40 @@ function isValidKey(key: Buffer | undefined): key is Buffer {
   return Buffer.isBuffer(key) && key.byteLength >= 32;
 }
 
+function isLocalTestClient(client: Sql) {
+  const { database, host, path } = client.options;
+  return (
+    database === "mizvo_test" &&
+    !path &&
+    host.length === 1 &&
+    (host[0] === "127.0.0.1" || host[0] === "::1")
+  );
+}
+
+async function assertIsolatedTestDatabase(client: Sql, query: Sql | TransactionSql) {
+  if (!isLocalTestClient(client)) {
+    throw new RecoveryCodeConfigurationError(
+      "Recovery code test service requires a loopback connection to mizvo_test",
+    );
+  }
+  const rows = await query`SELECT current_database() AS database`;
+  if (rows[0]?.database !== "mizvo_test") {
+    throw new RecoveryCodeConfigurationError(
+      "Recovery code test service requires the isolated local mizvo_test database",
+    );
+  }
+}
+
 /**
  * Internal synthetic-account state machine for PostgreSQL security tests.
  * This module is deliberately not imported by Fastify or Better Auth handlers.
  */
 export function createRecoveryCodeTestService(options: RecoveryCodeTestOptions) {
+  if (!isLocalTestClient(options.client)) {
+    throw new RecoveryCodeConfigurationError(
+      "Recovery code test service requires a loopback connection to mizvo_test",
+    );
+  }
   if (process.env.NODE_ENV !== "test") {
     throw new RecoveryCodeConfigurationError("Recovery code test service is test-only");
   }
@@ -75,11 +104,12 @@ export function createRecoveryCodeTestService(options: RecoveryCodeTestOptions) 
 
   async function isSyntheticVerifiedUser(tx: Sql | TransactionSql, userId: string) {
     const rows = await tx`
-      SELECT "id" FROM "user"
-      WHERE "id" = ${userId}
+      SELECT "user"."id" FROM "user"
+      INNER JOIN "recovery_test_identity" test_identity
+        ON test_identity."user_id" = "user"."id"
+      WHERE "user"."id" = ${userId}
         AND "phone_number_verified" = true
-        AND "email_verified" = false
-        AND "email" LIKE '%@users.invalid'
+        AND "user"."email_verified" = false
       LIMIT 1
     `;
     return rows.length === 1;
@@ -91,6 +121,11 @@ export function createRecoveryCodeTestService(options: RecoveryCodeTestOptions) 
 
   /** Codes leave this internal test boundary exactly once; only keyed HMACs persist. */
   async function issueForSyntheticTest(userId: string, codeCount: number) {
+    if (!isLocalTestClient(client)) {
+      throw new RecoveryCodeConfigurationError(
+        "Recovery code test service requires a loopback connection to mizvo_test",
+      );
+    }
     if (!Number.isInteger(codeCount) || codeCount < 1 || codeCount > 16) {
       throw new RecoveryCodeConfigurationError("Test code count must be between 1 and 16");
     }
@@ -104,6 +139,7 @@ export function createRecoveryCodeTestService(options: RecoveryCodeTestOptions) 
     const setId = randomUUID();
     let epoch = 0;
     await client.begin(async (tx) => {
+      await assertIsolatedTestDatabase(client, tx);
       await lockAccount(tx, userId);
       if (!(await isSyntheticVerifiedUser(tx, userId))) {
         throw new RecoveryCodeConfigurationError("Synthetic verified account required");
@@ -164,6 +200,11 @@ export function createRecoveryCodeTestService(options: RecoveryCodeTestOptions) 
     capabilityExpiresAt: Date;
     now?: Date;
   }): Promise<RecoveryCodeResult> {
+    if (!isLocalTestClient(client)) {
+      throw new RecoveryCodeConfigurationError(
+        "Recovery code test service requires a loopback connection to mizvo_test",
+      );
+    }
     // Plaintext is accepted only at this internal boundary and is never put in SQL,
     // audit rows, errors or logs. OTP receipts are passed to the injected test verifier.
     const now = input.now ?? new Date();
@@ -176,7 +217,11 @@ export function createRecoveryCodeTestService(options: RecoveryCodeTestOptions) 
     const codeShapeValid = /^[A-Za-z0-9_-]{43}$/.test(input.code);
 
     return client.begin(async (tx) => {
+      await assertIsolatedTestDatabase(client, tx);
       await lockAccount(tx, input.userId);
+      if (!(await isSyntheticVerifiedUser(tx, input.userId))) {
+        return { accepted: false, reason: "invalid" } as const;
+      }
       const recent = await tx`
         SELECT
           (SELECT count(*) FROM "recovery_attempt"
@@ -334,15 +379,22 @@ export function createRecoveryCodeTestService(options: RecoveryCodeTestOptions) 
     now?: Date;
   }) {
     const now = input.now ?? new Date();
+    await assertIsolatedTestDatabase(client, client);
     const rows = await client`
-      SELECT "id", "attempt_id" AS "attemptId", "key_version" AS "keyVersion", "verifier" FROM "recovery_capability"
-      WHERE "id" = ${input.capabilityId}
-        AND "user_id" = ${input.userId}
-        AND "attempt_id" = ${input.attemptId}
-        AND "purpose" = ${CAPABILITY_PURPOSE}
-        AND "scope" = ${CAPABILITY_SCOPE}
-        AND "expires_at" > ${now.toISOString()}
-        AND "used_at" IS NULL AND "revoked_at" IS NULL
+      SELECT
+        "recovery_capability"."id",
+        "recovery_capability"."attempt_id" AS "attemptId",
+        "recovery_capability"."key_version" AS "keyVersion",
+        "recovery_capability"."verifier"
+      FROM "recovery_capability"
+      INNER JOIN "recovery_test_identity" test_identity ON test_identity."user_id" = "recovery_capability"."user_id"
+      WHERE "recovery_capability"."id" = ${input.capabilityId}
+        AND "recovery_capability"."user_id" = ${input.userId}
+        AND "recovery_capability"."attempt_id" = ${input.attemptId}
+        AND "recovery_capability"."purpose" = ${CAPABILITY_PURPOSE}
+        AND "recovery_capability"."scope" = ${CAPABILITY_SCOPE}
+        AND "recovery_capability"."expires_at" > ${now.toISOString()}
+        AND "recovery_capability"."used_at" IS NULL AND "recovery_capability"."revoked_at" IS NULL
       LIMIT 1
     `;
     const row = rows[0];
@@ -367,12 +419,24 @@ export function createRecoveryCodeTestService(options: RecoveryCodeTestOptions) 
     now?: Date;
   }) {
     const now = input.now ?? new Date();
+    if (!isLocalTestClient(client)) {
+      throw new RecoveryCodeConfigurationError(
+        "Recovery code test service requires a loopback connection to mizvo_test",
+      );
+    }
     return client.begin(async (tx) => {
+      await assertIsolatedTestDatabase(client, tx);
+      if (!(await isSyntheticVerifiedUser(tx, input.userId))) return false;
       const existing = await tx`
-        SELECT "key_version" AS "keyVersion" FROM "recovery_capability"
-        WHERE "id" = ${input.capabilityId} AND "user_id" = ${input.userId} AND "attempt_id" = ${input.attemptId}
-          AND "purpose" = ${CAPABILITY_PURPOSE} AND "scope" = ${CAPABILITY_SCOPE}
-          AND "expires_at" > ${now.toISOString()} AND "used_at" IS NULL AND "revoked_at" IS NULL
+        SELECT "recovery_capability"."key_version" AS "keyVersion" FROM "recovery_capability"
+        INNER JOIN "recovery_test_identity" test_identity ON test_identity."user_id" = "recovery_capability"."user_id"
+        WHERE "recovery_capability"."id" = ${input.capabilityId}
+          AND "recovery_capability"."user_id" = ${input.userId}
+          AND "recovery_capability"."attempt_id" = ${input.attemptId}
+          AND "recovery_capability"."purpose" = ${CAPABILITY_PURPOSE}
+          AND "recovery_capability"."scope" = ${CAPABILITY_SCOPE}
+          AND "recovery_capability"."expires_at" > ${now.toISOString()}
+          AND "recovery_capability"."used_at" IS NULL AND "recovery_capability"."revoked_at" IS NULL
         LIMIT 1
       `;
       const keyVersion = existing[0]?.keyVersion;
@@ -406,8 +470,17 @@ export function createRecoveryCodeTestService(options: RecoveryCodeTestOptions) 
   }
 
   async function revokeCodeSetsForSyntheticTest(userId: string) {
+    if (!isLocalTestClient(client)) {
+      throw new RecoveryCodeConfigurationError(
+        "Recovery code test service requires a loopback connection to mizvo_test",
+      );
+    }
     return client.begin(async (tx) => {
+      await assertIsolatedTestDatabase(client, tx);
       await lockAccount(tx, userId);
+      if (!(await isSyntheticVerifiedUser(tx, userId))) {
+        throw new RecoveryCodeConfigurationError("Synthetic verified account required");
+      }
       const rows = await tx`
         UPDATE "recovery_code_set" SET "revoked_at" = now()
         WHERE "user_id" = ${userId} AND "revoked_at" IS NULL

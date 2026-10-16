@@ -58,7 +58,7 @@ jobs:
       - name: Test
         run: pnpm test
         env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/mizvo_test
+          DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/mizvo_test
 
       - name: Lint
         run: pnpm lint

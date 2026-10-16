@@ -308,6 +308,20 @@ export const businessAuditEvent = pgTable(
 
 // C3b development/test-only recovery foundation. These records are not wired
 // to an HTTP handler and cannot authorize Better Auth sessions or business work.
+export const recoveryTestIdentity = pgTable(
+  "recovery_test_identity",
+  {
+    userId: text("user_id")
+      .primaryKey()
+      .references(() => user.id, { onDelete: "cascade" }),
+    designation: text("designation").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    check("recovery_test_identity_designation", sql`${table.designation} = 'synthetic_fixture'`),
+  ],
+);
+
 export const recoveryCodeSet = pgTable(
   "recovery_code_set",
   {

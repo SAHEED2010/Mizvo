@@ -163,10 +163,7 @@ postgresSuite("authentication PostgreSQL invariants", () => {
   beforeAll(async () => {
     if (!databaseUrl) throw new Error("DATABASE_URL is required for PostgreSQL integration tests");
     const target = new URL(databaseUrl);
-    if (
-      !["localhost", "127.0.0.1", "::1"].includes(target.hostname) ||
-      target.pathname !== "/mizvo_test"
-    ) {
+    if (!["127.0.0.1", "::1"].includes(target.hostname) || target.pathname !== "/mizvo_test") {
       throw new Error(
         "PostgreSQL tests only run against the isolated local mizvo_test database; refusing other targets",
       );
@@ -228,6 +225,7 @@ postgresSuite("authentication PostgreSQL invariants", () => {
       keyVersion?: string;
       key?: Buffer;
       keyring?: Readonly<Record<string, Buffer>>;
+      client?: ReturnType<typeof postgres>;
       maxAttempts?: number;
       verifyPhoneOtpReceipt?: (receipt: string, userId: string) => Promise<boolean>;
     } = {},
@@ -235,7 +233,7 @@ postgresSuite("authentication PostgreSQL invariants", () => {
     const keyVersion = options.keyVersion ?? "test-v1";
     const key = options.key ?? Buffer.alloc(32, 0x51);
     return createRecoveryCodeTestService({
-      client,
+      client: options.client ?? client,
       keyring: options.keyring ?? { [keyVersion]: key },
       activeKeyVersion: keyVersion,
       rateLimit: { maxAttempts: options.maxAttempts ?? 20, windowMs: 5 * 60_000 },
@@ -251,6 +249,10 @@ postgresSuite("authentication PostgreSQL invariants", () => {
     await client`
       INSERT INTO "user" ("id", "name", "email", "email_verified", "phone_number", "phone_number_verified")
       VALUES (${id}, 'Synthetic Recovery User', ${`${id}@users.invalid`}, false, ${phoneNumber}, ${phoneVerified})
+    `;
+    await client`
+      INSERT INTO "recovery_test_identity" ("user_id", "designation")
+      VALUES (${id}, 'synthetic_fixture')
     `;
     return id;
   }
@@ -622,6 +624,88 @@ postgresSuite("authentication PostgreSQL invariants", () => {
         await client`SELECT count(*)::int AS count FROM "recovery_code_set" WHERE "user_id" = ${userId}`
       )[0]?.count,
     ).toBe(0);
+  });
+
+  it("rejects clients configured for a non-loopback host or a different database before connecting", async () => {
+    const misconfiguredClients = [
+      postgres("postgres://postgres:postgres@192.0.2.1:5432/mizvo_test", {
+        connect_timeout: 1,
+      }),
+      postgres("postgres://postgres:postgres@127.0.0.1:5432/production", {
+        connect_timeout: 1,
+      }),
+    ];
+    try {
+      for (const unsafeClient of misconfiguredClients) {
+        expect(() => createRecoveryTestService({ client: unsafeClient })).toThrow(
+          "loopback connection to mizvo_test",
+        );
+      }
+    } finally {
+      await Promise.all(misconfiguredClients.map((unsafeClient) => unsafeClient.end()));
+    }
+  });
+
+  it("denies ordinary verified phone-first Better Auth accounts despite their placeholder email", async () => {
+    const auth = createTestAuth();
+    const phoneNumber = `+234803${randomInt(1_000_000, 9_999_999)}`;
+    const send = await authRequest(auth, "/phone-number/send-otp", { phoneNumber });
+    expect(send.status).toBe(200);
+    const verified = await authRequest(auth, "/phone-number/verify", {
+      phoneNumber,
+      code: deliveries.at(-1)?.code,
+    });
+    expect(verified.status).toBe(200);
+
+    const [ordinaryUser] = await client`
+      SELECT "id", "email", "email_verified", "phone_number_verified"
+      FROM "user" WHERE "phone_number" = ${phoneNumber}
+    `;
+    expect(ordinaryUser?.email).toMatch(/^phone-.+@users\.invalid$/);
+    expect(ordinaryUser?.email_verified).toBe(false);
+    expect(ordinaryUser?.phone_number_verified).toBe(true);
+
+    const service = createRecoveryTestService();
+    await expect(service.issueForSyntheticTest(String(ordinaryUser?.id), 1)).rejects.toThrow(
+      "Synthetic verified account required",
+    );
+    await expect(
+      service.redeemForSyntheticTest({
+        userId: String(ordinaryUser?.id),
+        attemptId: randomUUID(),
+        code: "not-a-recovery-code",
+        otpReceipt: `verified-test-otp:${String(ordinaryUser?.id)}`,
+        capabilityExpiresAt: new Date(Date.now() + 60_000),
+      }),
+    ).resolves.toEqual({ accepted: false, reason: "invalid" });
+    await expect(service.revokeCodeSetsForSyntheticTest(String(ordinaryUser?.id))).rejects.toThrow(
+      "Synthetic verified account required",
+    );
+    await expect(
+      service.inspectRestrictedTestCapability({
+        capabilityId: randomUUID(),
+        capabilityToken: "not-a-capability",
+        userId: String(ordinaryUser?.id),
+        attemptId: randomUUID(),
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      service.consumeRestrictedTestCapability({
+        capabilityId: randomUUID(),
+        capabilityToken: "not-a-capability",
+        userId: String(ordinaryUser?.id),
+        attemptId: randomUUID(),
+      }),
+    ).resolves.toBe(false);
+
+    const rows = await client`
+      SELECT
+        (SELECT count(*)::int FROM "recovery_test_identity" WHERE "user_id" = ${ordinaryUser?.id}) AS registered,
+        (SELECT count(*)::int FROM "recovery_code_set" WHERE "user_id" = ${ordinaryUser?.id}) AS sets,
+        (SELECT count(*)::int FROM "recovery_attempt" WHERE "user_id" = ${ordinaryUser?.id}) AS attempts,
+        (SELECT count(*)::int FROM "recovery_audit_event" WHERE "user_id" = ${ordinaryUser?.id}) AS audit_events
+    `;
+    expect(rows[0]).toEqual({ registered: 0, sets: 0, attempts: 0, audit_events: 0 });
   });
 
   it("rejects deleting or demoting the last owner", async () => {
