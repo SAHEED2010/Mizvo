@@ -1736,14 +1736,8 @@ postgresSuite("authentication PostgreSQL invariants", () => {
       const harnessProof = await assertionFor();
       const harnessEvidence = await harnessProof.result();
       if (!harnessEvidence) throw new Error("Expected C3d harness proof");
-      const reservedClient = await client.reserve();
-      try {
-        await reservedClient`CREATE TEMP TABLE "c3d_test_action_effect" ("target" text PRIMARY KEY) ON COMMIT PRESERVE ROWS`;
-        const harness = createProtectedActionTestHarness({
-          client,
-          transactionClient: reservedClient,
-          proofConsumer: stepUp,
-        });
+      const harness = createProtectedActionTestHarness({ client, proofConsumer: stepUp });
+      {
         const wrongTarget = await harness.authorizeAndRun({
           proofId: harnessEvidence.proofId,
           scope: { ...scope, target: "different-invitation-target" },
@@ -1762,29 +1756,55 @@ postgresSuite("authentication PostgreSQL invariants", () => {
           action: async () => "must-not-run",
         });
         expect(wrongSession).toEqual({ allowed: false });
+        const rolledBackEffectId = randomUUID();
         await expect(
           harness.authorizeAndRun({
             proofId: harnessEvidence.proofId,
             scope,
             action: async (tx) => {
-              await tx`INSERT INTO "c3d_test_action_effect" ("target") VALUES (${scope.target})`;
+              await tx`
+                INSERT INTO "protected_action_test_effect"
+                  ("id", "user_id", "business_id", "action", "target_digest")
+                VALUES (
+                  ${rolledBackEffectId}, ${userId}, ${businessId}, ${scope.action},
+                  ${createHash("sha256").update(scope.target).digest("hex")}
+                )
+              `;
               throw new Error("synthetic mutation failure");
             },
           }),
         ).rejects.toThrow("synthetic mutation failure");
-        const rolledBackEffect = await reservedClient`
-          SELECT "target" FROM "c3d_test_action_effect" WHERE "target" = ${scope.target}
+        const rolledBackEffect = await client`
+          SELECT "id" FROM "protected_action_test_effect" WHERE "id" = ${rolledBackEffectId}
         `;
         expect(rolledBackEffect).toEqual([]);
+        const committedEffectId = randomUUID();
         const retry = await harness.authorizeAndRun({
           proofId: harnessEvidence.proofId,
           scope,
           action: async (tx) => {
-            await tx`INSERT INTO "c3d_test_action_effect" ("target") VALUES (${scope.target})`;
+            await tx`
+              INSERT INTO "protected_action_test_effect"
+                ("id", "user_id", "business_id", "action", "target_digest")
+              VALUES (
+                ${committedEffectId}, ${userId}, ${businessId}, ${scope.action},
+                ${createHash("sha256").update(scope.target).digest("hex")}
+              )
+            `;
             return "committed";
           },
         });
         expect(retry).toEqual({ allowed: true, result: "committed" });
+        const committedEffect = await client`
+          SELECT "action", "target_digest" FROM "protected_action_test_effect"
+          WHERE "id" = ${committedEffectId}
+        `;
+        expect(committedEffect).toEqual([
+          {
+            action: scope.action,
+            target_digest: createHash("sha256").update(scope.target).digest("hex"),
+          },
+        ]);
         const revokeScope = {
           ...scope,
           action: "business.invitation.revoke",
@@ -1796,7 +1816,14 @@ postgresSuite("authentication PostgreSQL invariants", () => {
           proofId: revokeEvidence.proofId,
           scope: revokeScope,
           action: async (tx) => {
-            await tx`INSERT INTO "c3d_test_action_effect" ("target") VALUES (${revokeScope.target})`;
+            await tx`
+              INSERT INTO "protected_action_test_effect"
+                ("id", "user_id", "business_id", "action", "target_digest")
+              VALUES (
+                ${randomUUID()}, ${userId}, ${businessId}, ${revokeScope.action},
+                ${createHash("sha256").update(revokeScope.target).digest("hex")}
+              )
+            `;
             return "revocation-effect-committed";
           },
         });
@@ -1807,9 +1834,6 @@ postgresSuite("authentication PostgreSQL invariants", () => {
           action: async () => "must-not-run",
         });
         expect(replay).toEqual({ allowed: false });
-      } finally {
-        await reservedClient`DROP TABLE IF EXISTS "c3d_test_action_effect"`;
-        await reservedClient.release();
       }
 
       const concurrentEvidence = await (await assertionFor()).result();

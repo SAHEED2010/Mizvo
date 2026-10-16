@@ -2,7 +2,7 @@
 
 ## Scope and boundary
 
-This implementation adds an internal synthetic-account test harness only. It requires `NODE_ENV=test`, a loopback postgres.js connection to `mizvo_test`, and an existing C3c proof for the exact user, session, business, owner membership, action and target. The harness checks the database identity again before and inside its transaction, consumes the proof in that transaction, then runs the supplied test effect. A failed effect rolls back both the effect and proof consumption; replay and concurrent use allow one execution at most.
+This implementation adds an internal synthetic-account test harness only. It requires `NODE_ENV=test`, a loopback postgres.js connection to `mizvo_test`, and an existing C3c proof for the exact user, session, business, owner membership, action and target. The harness checks the database identity again before and inside its transaction, consumes the proof in that transaction, then runs the supplied test effect. Effects use the constrained `protected_action_test_effect` table, which accepts only invitation create/revoke metadata for C3c synthetic identities; it does not store invitation tokens, phone numbers or real membership changes. A failed effect rolls back both the effect and proof consumption; replay and concurrent use allow one execution at most.
 
 The harness is not imported by Fastify or the C2 guard. It does not authorize any runtime request. Existing owner-sensitive HTTP routes and Better Auth's unrestricted Organization/Passkey paths remain denied. C3a provisional passkeys and C3b synthetic recovery state remain ineligible for production owner authorization.
 

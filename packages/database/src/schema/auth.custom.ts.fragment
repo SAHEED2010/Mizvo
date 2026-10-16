@@ -384,3 +384,34 @@ export const stepUpTestAuditEvent = pgTable(
     ),
   ],
 );
+
+export const protectedActionTestEffect = pgTable(
+  "protected_action_test_effect",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => stepUpTestIdentity.userId, { onDelete: "cascade" }),
+    businessId: text("business_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    action: text("action").notNull(),
+    targetDigest: text("target_digest").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("protected_action_test_effect_scope_idx").on(
+      table.userId,
+      table.businessId,
+      table.action,
+    ),
+    check(
+      "protected_action_test_effect_action_allowed",
+      sql`${table.action} IN ('business.invitation.create', 'business.invitation.revoke')`,
+    ),
+    check(
+      "protected_action_test_effect_target_digest_format",
+      sql`${table.targetDigest} ~ '^[0-9a-f]{64}$'`,
+    ),
+  ],
+);
