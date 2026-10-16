@@ -57,6 +57,20 @@
       "when": 1792139041266,
       "tag": "0007_nifty_sentry",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1792146611712,
+      "tag": "0008_c3c_step_up_foundation",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1792147088134,
+      "tag": "0009_c3c_counter_snapshot",
+      "breakpoints": true
     }
   ]
 }

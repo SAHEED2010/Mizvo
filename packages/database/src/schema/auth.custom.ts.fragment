@@ -216,3 +216,171 @@ export const recoveryAuditEvent = pgTable(
     ),
   ],
 );
+
+// C3c internal WebAuthn verifier state. Every row is restricted to explicitly
+// registered synthetic test identities; no production handler consumes it.
+export const stepUpTestIdentity = pgTable(
+  "step_up_test_identity",
+  {
+    userId: text("user_id")
+      .primaryKey()
+      .references(() => user.id, { onDelete: "cascade" }),
+    designation: text("designation").notNull(),
+    securityEpoch: integer("security_epoch").default(1).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    check("step_up_test_identity_designation", sql`${table.designation} = 'synthetic_fixture'`),
+    check("step_up_test_identity_epoch_positive", sql`${table.securityEpoch} > 0`),
+  ],
+);
+
+export const stepUpChallenge = pgTable(
+  "step_up_challenge",
+  {
+    id: text("id").primaryKey(),
+    challengeHash: text("challenge_hash").notNull().unique(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => stepUpTestIdentity.userId, { onDelete: "cascade" }),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => session.id, { onDelete: "cascade" }),
+    businessId: text("business_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    credentialId: text("credential_id").notNull(),
+    credentialFingerprint: text("credential_fingerprint").notNull(),
+    credentialCounter: integer("credential_counter").notNull(),
+    membershipRole: text("membership_role").notNull(),
+    action: text("action").notNull(),
+    targetDigest: text("target_digest").notNull(),
+    securityEpoch: integer("security_epoch").notNull(),
+    recoveryActivityCount: integer("recovery_activity_count").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    expiresAt: timestamp("expires_at").notNull(),
+    consumedAt: timestamp("consumed_at"),
+  },
+  (table) => [
+    index("step_up_challenge_user_created_idx").on(table.userId, table.createdAt),
+    index("step_up_challenge_session_idx").on(table.sessionId),
+    foreignKey({
+      name: "step_up_challenge_credential_fk",
+      columns: [table.credentialId],
+      foreignColumns: [passkey.credentialID],
+    }).onDelete("cascade"),
+    check("step_up_challenge_hash_format", sql`${table.challengeHash} ~ '^[0-9a-f]{64}$'`),
+    check(
+      "step_up_challenge_credential_fingerprint_format",
+      sql`${table.credentialFingerprint} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check("step_up_challenge_counter_nonnegative", sql`${table.credentialCounter} >= 0`),
+    check("step_up_challenge_target_digest_format", sql`${table.targetDigest} ~ '^[0-9a-f]{64}$'`),
+    check(
+      "step_up_challenge_action_allowed",
+      sql`${table.action} IN ('business.invitation.create', 'business.member.remove', 'business.member.role_change')`,
+    ),
+    check(
+      "step_up_challenge_role_allowed",
+      sql`${table.membershipRole} IN ('owner', 'manager', 'staff', 'viewer')`,
+    ),
+    check("step_up_challenge_epoch_positive", sql`${table.securityEpoch} > 0`),
+    check("step_up_challenge_recovery_count_nonnegative", sql`${table.recoveryActivityCount} >= 0`),
+    check(
+      "step_up_challenge_expiry_window",
+      sql`${table.expiresAt} > ${table.createdAt} AND ${table.expiresAt} <= ${table.createdAt} + interval '5 minutes'`,
+    ),
+  ],
+);
+
+export const stepUpProof = pgTable(
+  "step_up_proof",
+  {
+    id: text("id").primaryKey(),
+    challengeId: text("challenge_id")
+      .notNull()
+      .unique()
+      .references(() => stepUpChallenge.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => stepUpTestIdentity.userId, { onDelete: "cascade" }),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => session.id, { onDelete: "cascade" }),
+    businessId: text("business_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    credentialId: text("credential_id").notNull(),
+    credentialFingerprint: text("credential_fingerprint").notNull(),
+    credentialCounter: integer("credential_counter").notNull(),
+    membershipRole: text("membership_role").notNull(),
+    action: text("action").notNull(),
+    targetDigest: text("target_digest").notNull(),
+    securityEpoch: integer("security_epoch").notNull(),
+    recoveryActivityCount: integer("recovery_activity_count").notNull(),
+    issuedAt: timestamp("issued_at").defaultNow().notNull(),
+    expiresAt: timestamp("expires_at").notNull(),
+    consumedAt: timestamp("consumed_at"),
+  },
+  (table) => [
+    index("step_up_proof_user_scope_idx").on(
+      table.userId,
+      table.sessionId,
+      table.businessId,
+      table.action,
+    ),
+    foreignKey({
+      name: "step_up_proof_credential_fk",
+      columns: [table.credentialId],
+      foreignColumns: [passkey.credentialID],
+    }).onDelete("cascade"),
+    check(
+      "step_up_proof_credential_fingerprint_format",
+      sql`${table.credentialFingerprint} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check("step_up_proof_counter_nonnegative", sql`${table.credentialCounter} >= 0`),
+    check("step_up_proof_target_digest_format", sql`${table.targetDigest} ~ '^[0-9a-f]{64}$'`),
+    check(
+      "step_up_proof_action_allowed",
+      sql`${table.action} IN ('business.invitation.create', 'business.member.remove', 'business.member.role_change')`,
+    ),
+    check(
+      "step_up_proof_role_allowed",
+      sql`${table.membershipRole} IN ('owner', 'manager', 'staff', 'viewer')`,
+    ),
+    check("step_up_proof_epoch_positive", sql`${table.securityEpoch} > 0`),
+    check("step_up_proof_recovery_count_nonnegative", sql`${table.recoveryActivityCount} >= 0`),
+    check(
+      "step_up_proof_expiry_window",
+      sql`${table.expiresAt} > ${table.issuedAt} AND ${table.expiresAt} <= ${table.issuedAt} + interval '10 minutes'`,
+    ),
+  ],
+);
+
+export const stepUpTestAuditEvent = pgTable(
+  "step_up_test_audit_event",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").references(() => stepUpTestIdentity.userId, { onDelete: "set null" }),
+    businessId: text("business_id").references(() => organization.id, { onDelete: "set null" }),
+    credentialFingerprint: text("credential_fingerprint"),
+    event: text("event").notNull(),
+    outcome: text("outcome").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("step_up_test_audit_user_time_idx").on(table.userId, table.createdAt),
+    check(
+      "step_up_test_audit_event_allowed",
+      sql`${table.event} IN ('challenge_issued', 'assertion_verified', 'assertion_rejected', 'proof_consumed')`,
+    ),
+    check(
+      "step_up_test_audit_outcome_allowed",
+      sql`${table.outcome} IN ('issued', 'verified', 'rejected', 'consumed', 'replayed', 'stale')`,
+    ),
+    check(
+      "step_up_test_audit_fingerprint_format",
+      sql`${table.credentialFingerprint} IS NULL OR ${table.credentialFingerprint} ~ '^[0-9a-f]{64}$'`,
+    ),
+  ],
+);

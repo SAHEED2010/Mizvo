@@ -2,9 +2,13 @@ import { spawn } from "node:child_process";
 import { createHash, randomInt, randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { createDatabase } from "@mizvo/database";
+import type {
+  AuthenticationResponseJSON,
+  PublicKeyCredentialRequestOptionsJSON,
+} from "@simplewebauthn/server";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
-import { chromium } from "playwright";
+import { chromium, type Page } from "playwright";
 import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildApp } from "../app.js";
@@ -19,6 +23,7 @@ import {
 import { requireVerifiedPasskeyEnrollment } from "./plugins.js";
 import { createRecoveryCodeTestService } from "./recovery-codes.js";
 import type { SmsTransport } from "./sms.js";
+import { createStepUpTestService } from "./step-up-test-service.js";
 
 type RegistrationResponse = {
   id: string;
@@ -118,6 +123,99 @@ function rewriteClientData(
   return changed;
 }
 
+async function createAuthenticationResponse(
+  page: Page,
+  options: PublicKeyCredentialRequestOptionsJSON,
+): Promise<AuthenticationResponseJSON> {
+  return page.evaluate(async (requestOptions) => {
+    const fromBase64url = (value: string) => {
+      const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+      const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+      const binary = atob(padded);
+      return Uint8Array.from(binary, (character) => character.charCodeAt(0)).buffer;
+    };
+    const toBase64url = (value: ArrayBuffer) => {
+      const bytes = new Uint8Array(value);
+      let binary = "";
+      for (const byte of bytes) binary += String.fromCharCode(byte);
+      return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+    };
+    const publicKey = {
+      ...requestOptions,
+      challenge: fromBase64url(requestOptions.challenge),
+      allowCredentials: requestOptions.allowCredentials?.map((credential) => ({
+        type: credential.type,
+        id: fromBase64url(credential.id),
+      })),
+    };
+    const credential = (await navigator.credentials.get({
+      publicKey,
+    })) as PublicKeyCredential | null;
+    if (!credential) throw new Error("virtual authenticator returned no assertion");
+    const assertion = credential.response as AuthenticatorAssertionResponse;
+    return {
+      id: credential.id,
+      rawId: toBase64url(credential.rawId),
+      type: credential.type as "public-key",
+      response: {
+        clientDataJSON: toBase64url(assertion.clientDataJSON),
+        authenticatorData: toBase64url(assertion.authenticatorData),
+        signature: toBase64url(assertion.signature),
+        userHandle: assertion.userHandle ? toBase64url(assertion.userHandle) : null,
+        transports: [],
+      },
+      clientExtensionResults: credential.getClientExtensionResults() as Record<string, unknown>,
+      authenticatorAttachment: credential.authenticatorAttachment as string | null,
+    };
+  }, options) as Promise<AuthenticationResponseJSON>;
+}
+
+function rewriteAssertionClientData(
+  response: AuthenticationResponseJSON,
+  mutate: (clientData: Record<string, unknown>) => void,
+): AuthenticationResponseJSON {
+  const changed = structuredClone(response);
+  const clientData = JSON.parse(
+    Buffer.from(changed.response.clientDataJSON, "base64url").toString("utf8"),
+  ) as Record<string, unknown>;
+  mutate(clientData);
+  changed.response.clientDataJSON = Buffer.from(JSON.stringify(clientData)).toString("base64url");
+  return changed;
+}
+
+function clearAssertionUserVerification(
+  response: AuthenticationResponseJSON,
+): AuthenticationResponseJSON {
+  const changed = structuredClone(response);
+  const authenticatorData = Buffer.from(changed.response.authenticatorData, "base64url");
+  const flags = authenticatorData.at(32);
+  if (flags === undefined || (flags & 0x04) === 0) {
+    throw new Error("Virtual authenticator ceremony did not set the UV flag");
+  }
+  authenticatorData[32] = flags & ~0x04;
+  changed.response.authenticatorData = authenticatorData.toString("base64url");
+  return changed;
+}
+
+function changeAssertionRpIdHash(
+  response: AuthenticationResponseJSON,
+  rpId: string,
+): AuthenticationResponseJSON {
+  const changed = structuredClone(response);
+  const authenticatorData = Buffer.from(changed.response.authenticatorData, "base64url");
+  createHash("sha256").update(rpId).digest().copy(authenticatorData, 0);
+  changed.response.authenticatorData = authenticatorData.toString("base64url");
+  return changed;
+}
+
+function alterAssertionSignature(response: AuthenticationResponseJSON): AuthenticationResponseJSON {
+  const changed = structuredClone(response);
+  const signature = Buffer.from(changed.response.signature, "base64url");
+  signature[0] = (signature[0] ?? 0) ^ 0x01;
+  changed.response.signature = signature.toString("base64url");
+  return changed;
+}
+
 function clearWebAuthnUserVerification(response: RegistrationResponse): RegistrationResponse {
   const changed = structuredClone(response);
   const attestation = Buffer.from(changed.response.attestationObject, "base64url");
@@ -181,7 +279,7 @@ postgresSuite("authentication PostgreSQL invariants", () => {
 
   beforeEach(async () => {
     deliveries.length = 0;
-    await client`TRUNCATE TABLE "recovery_audit_event", "recovery_capability", "recovery_attempt", "recovery_code", "recovery_code_set", "business_audit_event", "phone_invitation", "invitation", "member", "organization", "session", "account", "verification", "rate_limit", "user" CASCADE`;
+    await client`TRUNCATE TABLE "step_up_test_audit_event", "step_up_proof", "step_up_challenge", "step_up_test_identity", "recovery_audit_event", "recovery_capability", "recovery_attempt", "recovery_code", "recovery_code_set", "business_audit_event", "phone_invitation", "invitation", "member", "organization", "session", "account", "verification", "rate_limit", "user" CASCADE`;
   });
 
   afterAll(async () => {
@@ -1117,6 +1215,7 @@ postgresSuite("authentication PostgreSQL invariants", () => {
         // Even a mistakenly enabled feature flag must not activate production routes.
         MIZVO_PASSKEY_ENROLLMENT: "development",
         MIZVO_RECOVERY_CODES: "development",
+        MIZVO_STEP_UP: "development",
         NODE_ENV: "production",
       },
       { smsTransport },
@@ -1130,6 +1229,11 @@ postgresSuite("authentication PostgreSQL invariants", () => {
       ["POST", "/api/auth/passkey/delete-passkey"],
       ["POST", "/api/auth/passkey/update-passkey"],
       ["POST", "/api/auth/passkey/future-unreviewed-endpoint"],
+      ["POST", "/api/security/step-up"],
+      ["POST", "/api/security/step-up/start"],
+      ["POST", "/api/security/step-up/verify"],
+      ["POST", "/api/security/step-up/challenge"],
+      ["POST", "/api/auth/step-up/verify"],
       ["GET", "/api/recovery-codes"],
       ["POST", "/api/recovery-codes/issue"],
       ["POST", "/api/recovery-codes/redeem"],
@@ -1527,12 +1631,371 @@ postgresSuite("authentication PostgreSQL invariants", () => {
       expect(listed.data.passkeys).toHaveLength(1);
       expect(JSON.stringify(listed.data)).not.toContain("credentialID");
       expect(userId).toBe(credentials[0]?.user_id);
+
+      // Exercise C3c only through its internal test service. No Fastify or
+      // Better Auth authentication-verification route is enabled here.
+      const ownedBusiness =
+        await client`SELECT organization."id" FROM "organization" INNER JOIN "member" ON "member"."organization_id" = organization."id" WHERE "member"."user_id" = ${userId} AND "member"."role" = 'owner' LIMIT 1`;
+      const businessId = ownedBusiness[0]?.id as string | undefined;
+      expect(businessId).toBeTruthy();
+      if (!businessId || !userId) throw new Error("Expected a business and verified test user");
+      await client`
+        INSERT INTO "step_up_test_identity" ("user_id", "designation")
+        VALUES (${userId}, 'synthetic_fixture')
+      `;
+      const sessionRows =
+        await client`SELECT "id" FROM "session" WHERE "user_id" = ${userId} ORDER BY "created_at" DESC LIMIT 1`;
+      const sessionId = sessionRows[0]?.id as string | undefined;
+      expect(sessionId).toBeTruthy();
+      if (!sessionId) throw new Error("Expected an active test session");
+      const stepUp = createStepUpTestService({ client });
+      const scope = {
+        userId: userId as string,
+        sessionId: sessionId as string,
+        businessId: businessId as string,
+        action: "business.invitation.create",
+        target: "synthetic-recipient-member-1",
+      };
+      const assertionFor = async (
+        actionScope = scope,
+        mutate?: (response: AuthenticationResponseJSON) => AuthenticationResponseJSON,
+      ) => {
+        const challenge = await stepUp.startChallenge(actionScope);
+        const response = await createAuthenticationResponse(page, challenge.options);
+        return {
+          challenge,
+          response: mutate ? mutate(response) : response,
+          result: () =>
+            stepUp.verifyAssertion({
+              challengeId: challenge.challengeId,
+              scope: actionScope,
+              response: mutate ? mutate(response) : response,
+            }),
+        };
+      };
+
+      const successfulAssertion = await assertionFor();
+      expect(successfulAssertion.challenge.options.userVerification).toBe("required");
+      expect(successfulAssertion.challenge.options.rpId).toBe("localhost");
+      expect(successfulAssertion.challenge.expiresAt.getTime() - Date.now()).toBeLessThanOrEqual(
+        5 * 60_000,
+      );
+      const proof = await successfulAssertion.result();
+      expect(proof).not.toBeNull();
+      if (!proof) throw new Error("Expected a verified assertion to produce test evidence");
+      const proofRows = await client`
+        SELECT "user_id", "session_id", "business_id", "action", "target_digest",
+          "credential_id", "credential_fingerprint", "issued_at", "expires_at", "consumed_at"
+        FROM "step_up_proof" WHERE "id" = ${proof.proofId}
+      `;
+      expect(proofRows).toHaveLength(1);
+      expect(proofRows[0]).toMatchObject({
+        user_id: userId,
+        session_id: sessionId,
+        business_id: businessId,
+        action: scope.action,
+        target_digest: createHash("sha256").update(scope.target).digest("hex"),
+        consumed_at: null,
+      });
+      expect(new Date(proof.expiresAt).getTime() - Date.now()).toBeLessThanOrEqual(10 * 60_000);
+      expect(await stepUp.consumeProof(proof.proofId, { ...scope, target: "other-target" })).toBe(
+        false,
+      );
+      expect(
+        await stepUp.consumeProof(proof.proofId, {
+          ...scope,
+          action: "business.member.remove",
+        }),
+      ).toBe(false);
+      expect(
+        await stepUp.consumeProof(proof.proofId, {
+          ...scope,
+          businessId: "another-business-id",
+        }),
+      ).toBe(false);
+      expect(
+        await stepUp.consumeProof(proof.proofId, {
+          ...scope,
+          sessionId: "another-session-id",
+        }),
+      ).toBe(false);
+      expect(
+        await stepUp.consumeProof(proof.proofId, {
+          ...scope,
+          userId: "another-user-id",
+        }),
+      ).toBe(false);
+      expect(await stepUp.consumeProof(proof.proofId, scope)).toBe(true);
+      expect(await stepUp.consumeProof(proof.proofId, scope)).toBe(false);
+      expect(await successfulAssertion.result()).toBeNull();
+      expect(await currentOwnerSensitiveActionDecision(userId as string)).toEqual({
+        allowed: false,
+        reason: "independent_recovery_required",
+      });
+
+      const ordinaryAccount = await registerThroughApp(app, "+2348041234567");
+      const ordinaryUserId = ordinaryAccount.user?.id as string | undefined;
+      if (!ordinaryUserId) throw new Error("Expected a second verified phone account");
+      await client`
+        INSERT INTO "member" ("id", "organization_id", "user_id", "role", "created_at")
+        VALUES (${randomUUID()}, ${businessId}, ${ordinaryUserId}, 'owner', now())
+      `;
+      const ordinarySessionRows =
+        await client`SELECT "id" FROM "session" WHERE "user_id" = ${ordinaryUserId} LIMIT 1`;
+      await expect(
+        stepUp.startChallenge({
+          ...scope,
+          userId: ordinaryUserId,
+          sessionId: ordinarySessionRows[0]?.id as string,
+        }),
+      ).rejects.toThrow(/synthetic owner/);
+
+      const ownPasskey =
+        await client`SELECT "public_key" FROM "passkey" WHERE "user_id" = ${userId} LIMIT 1`;
+      const otherCredentialId = "credential-owned-by-another-user";
+      await client`
+        INSERT INTO "passkey" (
+          "id", "name", "public_key", "user_id", "credential_id", "counter",
+          "device_type", "backed_up", "created_at"
+        ) VALUES (
+          ${randomUUID()}, 'foreign synthetic credential fixture', ${ownPasskey[0]?.public_key},
+          ${ordinaryUserId}, ${otherCredentialId}, 0, 'singleDevice', false, now()
+        )
+      `;
+      const foreignCredentialChallenge = await stepUp.startChallenge(scope);
+      const foreignCredentialResponse = await createAuthenticationResponse(
+        page,
+        foreignCredentialChallenge.options,
+      );
+      await client`
+        UPDATE "step_up_challenge" SET "credential_id" = ${otherCredentialId}
+        WHERE "id" = ${foreignCredentialChallenge.challengeId}
+      `;
+      expect(
+        await stepUp.verifyAssertion({
+          challengeId: foreignCredentialChallenge.challengeId,
+          scope,
+          response: foreignCredentialResponse,
+        }),
+      ).toBeNull();
+
+      const rejectedAssertions: Array<{
+        mutate: (response: AuthenticationResponseJSON) => AuthenticationResponseJSON;
+      }> = [
+        {
+          mutate: (response) =>
+            rewriteAssertionClientData(response, (data) => {
+              data.challenge = Buffer.from("wrong-challenge").toString("base64url");
+            }),
+        },
+        {
+          mutate: (response) =>
+            rewriteAssertionClientData(response, (data) => {
+              data.origin = "http://127.0.0.1:3000";
+            }),
+        },
+        { mutate: (response) => changeAssertionRpIdHash(response, "attacker.test") },
+        { mutate: clearAssertionUserVerification },
+        { mutate: alterAssertionSignature },
+        {
+          mutate: (response) => ({
+            ...response,
+            id: "other-user-credential-id",
+            rawId: Buffer.from("other-user-credential-id").toString("base64url"),
+          }),
+        },
+      ];
+      for (const rejected of rejectedAssertions) {
+        const candidate = await assertionFor(scope, rejected.mutate);
+        expect(await candidate.result()).toBeNull();
+      }
+
+      const mismatchedScope = await assertionFor({ ...scope, target: "substituted-target" });
+      expect(
+        await stepUp.verifyAssertion({
+          challengeId: mismatchedScope.challenge.challengeId,
+          scope,
+          response: mismatchedScope.response,
+        }),
+      ).toBeNull();
+
+      const expiredChallenge = await stepUp.startChallenge(scope);
+      await client`
+        UPDATE "step_up_challenge"
+        SET "created_at" = now() - interval '6 minutes', "expires_at" = now() - interval '1 minute'
+        WHERE "id" = ${expiredChallenge.challengeId}
+      `;
+      const expiredResponse = await createAuthenticationResponse(page, expiredChallenge.options);
+      expect(
+        await stepUp.verifyAssertion({
+          challengeId: expiredChallenge.challengeId,
+          scope,
+          response: expiredResponse,
+        }),
+      ).toBeNull();
+
+      const counterRace = await stepUp.startChallenge(scope);
+      const counterRaceResponse = await createAuthenticationResponse(page, counterRace.options);
+      const beforeCounterRace =
+        await client`SELECT "counter" FROM "passkey" WHERE "user_id" = ${userId} LIMIT 1`;
+      const oldCounter = beforeCounterRace[0]?.counter as number;
+      await client`UPDATE "passkey" SET "counter" = ${oldCounter + 50} WHERE "user_id" = ${userId}`;
+      expect(
+        await stepUp.verifyAssertion({
+          challengeId: counterRace.challengeId,
+          scope,
+          response: counterRaceResponse,
+        }),
+      ).toBeNull();
+      await client`UPDATE "passkey" SET "counter" = ${oldCounter} WHERE "user_id" = ${userId}`;
+
+      const roleRevocation = await assertionFor();
+      const roleProof = await roleRevocation.result();
+      await client`UPDATE "member" SET "role" = 'manager' WHERE "organization_id" = ${businessId} AND "user_id" = ${userId}`;
+      expect(await stepUp.consumeProof(roleProof?.proofId as string, scope)).toBe(false);
+      await client`UPDATE "member" SET "role" = 'owner' WHERE "organization_id" = ${businessId} AND "user_id" = ${userId}`;
+      expect(await stepUp.consumeProof(roleProof?.proofId as string, scope)).toBe(false);
+
+      const membershipRevocation = await assertionFor();
+      const membershipProof = await membershipRevocation.result();
+      await client`DELETE FROM "member" WHERE "organization_id" = ${businessId} AND "user_id" = ${userId}`;
+      expect(await stepUp.consumeProof(membershipProof?.proofId as string, scope)).toBe(false);
+      await client`
+        INSERT INTO "member" ("id", "organization_id", "user_id", "role", "created_at")
+        VALUES (${randomUUID()}, ${businessId}, ${userId}, 'owner', now())
+      `;
+      expect(await stepUp.consumeProof(membershipProof?.proofId as string, scope)).toBe(false);
+
+      const epochRevocation = await assertionFor();
+      const epochProof = await epochRevocation.result();
+      const epochBefore =
+        await client`SELECT "security_epoch" FROM "step_up_test_identity" WHERE "user_id" = ${userId}`;
+      expect(await stepUp.advanceSyntheticSecurityEpoch(userId as string)).toBe(
+        (epochBefore[0]?.security_epoch as number) + 1,
+      );
+      expect(await stepUp.consumeProof(epochProof?.proofId as string, scope)).toBe(false);
+
+      const recoveryRevocation = await assertionFor();
+      const recoveryProof = await recoveryRevocation.result();
+      await client`
+        INSERT INTO "recovery_audit_event" ("id", "user_id", "event", "outcome")
+        VALUES (${randomUUID()}, ${userId}, 'redemption_attempted', 'invalid_code')
+      `;
+      expect(await stepUp.consumeProof(recoveryProof?.proofId as string, scope)).toBe(false);
+
+      const sessionRevocation = await assertionFor();
+      const sessionProof = await sessionRevocation.result();
+      const sessionExpiry =
+        await client`SELECT "expires_at" FROM "session" WHERE "id" = ${sessionId}`;
+      const originalSessionExpiry = sessionExpiry[0]?.expires_at;
+      if (!originalSessionExpiry) throw new Error("Expected the test session to exist");
+      await client`UPDATE "session" SET "expires_at" = now() - interval '1 minute' WHERE "id" = ${sessionId}`;
+      expect(await stepUp.consumeProof(sessionProof?.proofId as string, scope)).toBe(false);
+      await client`UPDATE "session" SET "expires_at" = ${originalSessionExpiry} WHERE "id" = ${sessionId}`;
+
+      const expiredSessionChallenge = await stepUp.startChallenge(scope);
+      const expiredSessionAssertion = await createAuthenticationResponse(
+        page,
+        expiredSessionChallenge.options,
+      );
+      await client`UPDATE "session" SET "expires_at" = now() - interval '1 minute' WHERE "id" = ${sessionId}`;
+      expect(
+        await stepUp.verifyAssertion({
+          challengeId: expiredSessionChallenge.challengeId,
+          scope,
+          response: expiredSessionAssertion,
+        }),
+      ).toBeNull();
+      await client`UPDATE "session" SET "expires_at" = ${originalSessionExpiry} WHERE "id" = ${sessionId}`;
+
+      const expiredProof = await assertionFor();
+      const expiringProof = await expiredProof.result();
+      if (!expiringProof) throw new Error("Expected evidence to expire in the test");
+      await client`
+        UPDATE "step_up_proof" SET "issued_at" = now() - interval '11 minutes',
+          "expires_at" = now() - interval '1 minute' WHERE "id" = ${expiringProof.proofId}
+      `;
+      expect(await stepUp.consumeProof(expiringProof.proofId, scope)).toBe(false);
+
+      const concurrent = await stepUp.startChallenge(scope);
+      const concurrentResponse = await createAuthenticationResponse(page, concurrent.options);
+      const concurrentResults = await Promise.all([
+        stepUp.verifyAssertion({
+          challengeId: concurrent.challengeId,
+          scope,
+          response: concurrentResponse,
+        }),
+        stepUp.verifyAssertion({
+          challengeId: concurrent.challengeId,
+          scope,
+          response: concurrentResponse,
+        }),
+      ]);
+      expect(concurrentResults.filter(Boolean)).toHaveLength(1);
+
+      const revocableChallenge = await stepUp.startChallenge(scope);
+      const revocableResponse = await createAuthenticationResponse(
+        page,
+        revocableChallenge.options,
+      );
+      const revocableProof = await stepUp.verifyAssertion({
+        challengeId: revocableChallenge.challengeId,
+        scope,
+        response: revocableResponse,
+      });
+      if (!revocableProof) throw new Error("Expected revocation fixture proof");
+
+      const challengeCount =
+        await client`SELECT count(*)::int AS count FROM "step_up_challenge" WHERE "user_id" = ${userId} AND "created_at" > now() - interval '5 minutes'`;
+      const neededChallenges = Math.max(0, 31 - (challengeCount[0]?.count ?? 0));
+      const identityRows =
+        await client`SELECT "security_epoch" FROM "step_up_test_identity" WHERE "user_id" = ${userId}`;
+      const challengeSnapshot = await client`
+        SELECT "credential_id", "credential_fingerprint", "credential_counter"
+        FROM "step_up_challenge" WHERE "id" = ${revocableChallenge.challengeId}
+      `;
+      for (let index = 0; index < neededChallenges; index++) {
+        await client`
+          INSERT INTO "step_up_challenge" (
+            "id", "challenge_hash", "user_id", "session_id", "business_id", "credential_id",
+            "credential_fingerprint", "credential_counter", "membership_role", "action",
+            "target_digest", "security_epoch", "recovery_activity_count", "created_at", "expires_at"
+          ) VALUES (
+            ${randomUUID()}, ${createHash("sha256").update(randomUUID()).digest("hex")},
+            ${userId}, ${sessionId}, ${businessId}, ${challengeSnapshot[0]?.credential_id},
+            ${challengeSnapshot[0]?.credential_fingerprint}, ${challengeSnapshot[0]?.credential_counter},
+            'owner', 'business.invitation.create', ${createHash("sha256").update(scope.target).digest("hex")},
+            ${identityRows[0]?.security_epoch},
+            (SELECT count(*)::int FROM "recovery_audit_event" WHERE "user_id" = ${userId}),
+            now(), now() + interval '4 minutes'
+          )
+        `;
+      }
+      await expect(stepUp.startChallenge(scope)).rejects.toThrow(/rate limit/i);
+
+      await client`DELETE FROM "passkey" WHERE "user_id" = ${userId}`;
+      expect(await stepUp.consumeProof(revocableProof.proofId, scope)).toBe(false);
+      expect(
+        await stepUp.verifyAssertion({
+          challengeId: revocableChallenge.challengeId,
+          scope,
+          response: revocableResponse,
+        }),
+      ).toBeNull();
+
+      const noStepUpRoutes = await Promise.all([
+        app.inject({ method: "POST", url: "/api/security/step-up" }),
+        app.inject({ method: "POST", url: "/api/security/step-up/start" }),
+        app.inject({ method: "POST", url: "/api/auth/passkey/verify-authentication" }),
+      ]);
+      expect(noStepUpRoutes.map((response) => response.statusCode)).toEqual([404, 404, 404]);
+
       await context.close();
     } finally {
       await browser.close();
       await app.close();
     }
-  }, 60_000);
+  }, 120_000);
 
   it("lists only the authenticated account's safe passkey status and enforces unique credential IDs", async () => {
     const app = createDevelopmentPasskeyApp();
