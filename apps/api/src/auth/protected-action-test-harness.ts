@@ -1,5 +1,7 @@
-import type { Sql, TransactionSql } from "postgres";
+import { randomUUID } from "node:crypto";
+import type { Sql } from "postgres";
 import type { StepUpTestScope } from "./step-up-test-service.js";
+import { getStepUpTestServiceForClient } from "./step-up-test-service.js";
 
 const OWNER_ACTIONS = new Set(["business.invitation.create", "business.invitation.revoke"]);
 
@@ -10,23 +12,13 @@ export class ProtectedActionTestHarnessError extends Error {
   }
 }
 
-export type TestProofConsumer = {
-  consumeProofInTransaction(
-    tx: TransactionSql,
-    proofId: string,
-    scope: StepUpTestScope,
-  ): Promise<boolean>;
-};
-
 /**
- * Synthetic-only transaction harness. It is deliberately not imported by the
- * Fastify application; C2's Better Auth adapter transaction cannot currently
- * share this postgres.js transaction.
+ * Synthetic-only transaction harness. The only mutation this API can perform
+ * is its internally-built, proof-scoped fixture row. It is not imported by
+ * Fastify because C2's Better Auth adapter cannot share this transaction.
  */
-export function createProtectedActionTestHarness(options: {
-  client: Sql;
-  proofConsumer: TestProofConsumer;
-}) {
+export function createProtectedActionTestHarness(options: { client: Sql; stepUp: unknown }) {
+  const stepUpService = getStepUpTestServiceForClient(options.stepUp, options.client);
   const { database, host, path } = options.client.options;
   if (
     process.env.NODE_ENV !== "test" ||
@@ -37,12 +29,15 @@ export function createProtectedActionTestHarness(options: {
   ) {
     throw new ProtectedActionTestHarnessError("configuration");
   }
+  if (!stepUpService) {
+    throw new ProtectedActionTestHarnessError("configuration");
+  }
+  const proofConsumer = stepUpService;
 
-  async function authorizeAndRun<T>(input: {
+  async function applySyntheticEffect(input: {
     proofId: string;
     scope: StepUpTestScope;
-    action: (tx: TransactionSql) => Promise<T>;
-  }): Promise<{ allowed: false } | { allowed: true; result: T }> {
+  }): Promise<{ allowed: false } | { allowed: true; effectId: string }> {
     if (!OWNER_ACTIONS.has(input.scope.action)) {
       throw new ProtectedActionTestHarnessError("invalid_action");
     }
@@ -56,14 +51,25 @@ export function createProtectedActionTestHarness(options: {
       if (transactionDatabase[0]?.database !== "mizvo_test") {
         throw new ProtectedActionTestHarnessError("configuration");
       }
-      if (
-        !(await options.proofConsumer.consumeProofInTransaction(tx, input.proofId, input.scope))
-      ) {
-        return { allowed: false };
-      }
-      return { allowed: true, result: await input.action(tx) };
+      const validated = await proofConsumer.consumeProofInTransaction(
+        tx,
+        input.proofId,
+        input.scope,
+      );
+      if (!validated || !OWNER_ACTIONS.has(validated.action)) return { allowed: false };
+
+      const effectId = randomUUID();
+      await tx`
+        INSERT INTO "protected_action_test_effect"
+          ("id", "proof_id", "user_id", "business_id", "action", "target_digest")
+        VALUES (
+          ${effectId}, ${input.proofId}, ${validated.userId}, ${validated.businessId},
+          ${validated.action}, ${validated.targetDigest}
+        )
+      `;
+      return { allowed: true, effectId };
     });
   }
 
-  return { authorizeAndRun };
+  return { applySyntheticEffect };
 }

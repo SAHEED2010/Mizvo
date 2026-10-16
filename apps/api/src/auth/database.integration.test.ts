@@ -1736,75 +1736,60 @@ postgresSuite("authentication PostgreSQL invariants", () => {
       const harnessProof = await assertionFor();
       const harnessEvidence = await harnessProof.result();
       if (!harnessEvidence) throw new Error("Expected C3d harness proof");
-      const harness = createProtectedActionTestHarness({ client, proofConsumer: stepUp });
+      const harness = createProtectedActionTestHarness({ client, stepUp });
       {
-        const wrongTarget = await harness.authorizeAndRun({
+        const wrongTarget = await harness.applySyntheticEffect({
           proofId: harnessEvidence.proofId,
           scope: { ...scope, target: "different-invitation-target" },
-          action: async () => "must-not-run",
         });
         expect(wrongTarget).toEqual({ allowed: false });
-        const wrongBusiness = await harness.authorizeAndRun({
+        const wrongBusiness = await harness.applySyntheticEffect({
           proofId: harnessEvidence.proofId,
           scope: { ...scope, businessId: "different-business" },
-          action: async () => "must-not-run",
         });
         expect(wrongBusiness).toEqual({ allowed: false });
-        const wrongSession = await harness.authorizeAndRun({
+        const wrongSession = await harness.applySyntheticEffect({
           proofId: harnessEvidence.proofId,
           scope: { ...scope, sessionId: "different-session" },
-          action: async () => "must-not-run",
         });
         expect(wrongSession).toEqual({ allowed: false });
-        const rolledBackEffectId = randomUUID();
+
+        // A database-side insert failure rolls back both the proof claim and effect.
+        await client.unsafe(
+          `CREATE FUNCTION c3d_test_reject_effect() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic insert failure'; END $$`,
+        );
+        await client.unsafe(
+          `CREATE TRIGGER c3d_test_reject_effect BEFORE INSERT ON protected_action_test_effect FOR EACH ROW EXECUTE FUNCTION c3d_test_reject_effect()`,
+        );
         await expect(
-          harness.authorizeAndRun({
-            proofId: harnessEvidence.proofId,
-            scope,
-            action: async (tx) => {
-              await tx`
-                INSERT INTO "protected_action_test_effect"
-                  ("id", "user_id", "business_id", "action", "target_digest")
-                VALUES (
-                  ${rolledBackEffectId}, ${userId}, ${businessId}, ${scope.action},
-                  ${createHash("sha256").update(scope.target).digest("hex")}
-                )
-              `;
-              throw new Error("synthetic mutation failure");
-            },
-          }),
-        ).rejects.toThrow("synthetic mutation failure");
-        const rolledBackEffect = await client`
-          SELECT "id" FROM "protected_action_test_effect" WHERE "id" = ${rolledBackEffectId}
+          harness.applySyntheticEffect({ proofId: harnessEvidence.proofId, scope }),
+        ).rejects.toThrow("synthetic insert failure");
+        await client.unsafe(`DROP TRIGGER c3d_test_reject_effect ON protected_action_test_effect`);
+        await client.unsafe(`DROP FUNCTION c3d_test_reject_effect()`);
+        const afterRollback = await client`
+          SELECT "consumed_at" FROM "step_up_proof" WHERE "id" = ${harnessEvidence.proofId}
         `;
-        expect(rolledBackEffect).toEqual([]);
-        const committedEffectId = randomUUID();
-        const retry = await harness.authorizeAndRun({
+        expect(afterRollback[0]?.consumed_at).toBeNull();
+        const retry = await harness.applySyntheticEffect({
           proofId: harnessEvidence.proofId,
           scope,
-          action: async (tx) => {
-            await tx`
-              INSERT INTO "protected_action_test_effect"
-                ("id", "user_id", "business_id", "action", "target_digest")
-              VALUES (
-                ${committedEffectId}, ${userId}, ${businessId}, ${scope.action},
-                ${createHash("sha256").update(scope.target).digest("hex")}
-              )
-            `;
-            return "committed";
-          },
         });
-        expect(retry).toEqual({ allowed: true, result: "committed" });
+        expect(retry.allowed).toBe(true);
+        if (!retry.allowed) throw new Error("Expected exact proof scope to commit an effect");
         const committedEffect = await client`
-          SELECT "action", "target_digest" FROM "protected_action_test_effect"
-          WHERE "id" = ${committedEffectId}
+          SELECT "proof_id", "user_id", "business_id", "action", "target_digest"
+          FROM "protected_action_test_effect" WHERE "id" = ${retry.effectId}
         `;
         expect(committedEffect).toEqual([
           {
+            proof_id: harnessEvidence.proofId,
+            user_id: userId,
+            business_id: businessId,
             action: scope.action,
             target_digest: createHash("sha256").update(scope.target).digest("hex"),
           },
         ]);
+
         const revokeScope = {
           ...scope,
           action: "business.invitation.revoke",
@@ -1812,67 +1797,63 @@ postgresSuite("authentication PostgreSQL invariants", () => {
         };
         const revokeEvidence = await (await assertionFor(revokeScope)).result();
         if (!revokeEvidence) throw new Error("Expected exact invitation-revocation proof");
-        const revokeResult = await harness.authorizeAndRun({
+        const revokeResult = await harness.applySyntheticEffect({
           proofId: revokeEvidence.proofId,
           scope: revokeScope,
-          action: async (tx) => {
-            await tx`
-              INSERT INTO "protected_action_test_effect"
-                ("id", "user_id", "business_id", "action", "target_digest")
-              VALUES (
-                ${randomUUID()}, ${userId}, ${businessId}, ${revokeScope.action},
-                ${createHash("sha256").update(revokeScope.target).digest("hex")}
-              )
-            `;
-            return "revocation-effect-committed";
-          },
         });
-        expect(revokeResult).toEqual({ allowed: true, result: "revocation-effect-committed" });
-        const replay = await harness.authorizeAndRun({
+        expect(revokeResult.allowed).toBe(true);
+        const replay = await harness.applySyntheticEffect({
           proofId: harnessEvidence.proofId,
           scope,
-          action: async () => "must-not-run",
         });
         expect(replay).toEqual({ allowed: false });
       }
 
       const concurrentEvidence = await (await assertionFor()).result();
       if (!concurrentEvidence) throw new Error("Expected concurrent harness proof");
-      const pooledHarness = createProtectedActionTestHarness({
-        client,
-        proofConsumer: stepUp,
-      });
+      const pooledHarness = createProtectedActionTestHarness({ client, stepUp });
       const claims = await Promise.all(
         Array.from({ length: 3 }, () =>
-          pooledHarness.authorizeAndRun({
+          pooledHarness.applySyntheticEffect({
             proofId: concurrentEvidence.proofId,
             scope,
-            action: async () => true,
           }),
         ),
       );
       expect(claims.filter((claim) => claim.allowed)).toHaveLength(1);
+      const concurrentEffects = await client`
+        SELECT "id" FROM "protected_action_test_effect"
+        WHERE "proof_id" = ${concurrentEvidence.proofId}
+      `;
+      expect(concurrentEffects).toHaveLength(1);
+
+      const fakeConsumer = {
+        consumeProofInTransaction: async () => ({
+          userId,
+          businessId,
+          action: scope.action,
+          targetDigest: createHash("sha256").update(scope.target).digest("hex"),
+        }),
+      };
+      expect(() => createProtectedActionTestHarness({ client, stepUp: fakeConsumer })).toThrow(
+        /configuration/i,
+      );
 
       const originalNodeEnv = process.env.NODE_ENV;
       process.env.NODE_ENV = "production";
       try {
-        expect(() => createProtectedActionTestHarness({ client, proofConsumer: stepUp })).toThrow(
+        expect(() => createProtectedActionTestHarness({ client, stepUp })).toThrow(
           /configuration/i,
         );
       } finally {
         process.env.NODE_ENV = originalNodeEnv;
       }
       await expect(
-        createProtectedActionTestHarness({
-          client,
-          proofConsumer: stepUp,
-        }).authorizeAndRun({
+        createProtectedActionTestHarness({ client, stepUp }).applySyntheticEffect({
           proofId: proof.proofId,
           scope: { ...scope, action: "business.member.remove" },
-          action: async () => "must-not-run",
         }),
       ).rejects.toMatchObject({ code: "invalid_action" });
-
       const bindingProof = await (await assertionFor()).result();
       if (!bindingProof) throw new Error("Expected a fresh proof for scope-binding tests");
       expect(

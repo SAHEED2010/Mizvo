@@ -31,6 +31,35 @@ export type StepUpTestScope = {
 
 type Scope = StepUpTestScope;
 
+export type ConsumedStepUpTestProof = Pick<StepUpTestScope, "userId" | "businessId" | "action"> & {
+  targetDigest: string;
+};
+
+const stepUpTestServiceClients = new WeakMap<object, Sql>();
+
+export type StepUpTestProofConsumer = {
+  consumeProofInTransaction(
+    tx: TransactionSql,
+    proofId: string,
+    scope: Scope,
+  ): Promise<ConsumedStepUpTestProof | null>;
+};
+
+/** The protected-action test harness accepts only a genuine C3c service created for its client. */
+export function getStepUpTestServiceForClient(
+  value: unknown,
+  client: Sql,
+): StepUpTestProofConsumer | null {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    stepUpTestServiceClients.get(value) !== client
+  ) {
+    return null;
+  }
+  return value as StepUpTestProofConsumer;
+}
+
 type Challenge = {
   id: string;
   challenge_hash: string;
@@ -486,8 +515,8 @@ export function createStepUpTestService(options: { client: Sql }) {
     tx: TransactionSql,
     proofId: string,
     scope: Scope,
-  ): Promise<boolean> {
-    if (!isScopeValid(scope)) return false;
+  ): Promise<ConsumedStepUpTestProof | null> {
+    if (!isScopeValid(scope)) return null;
     await assertIsolatedTestDatabase(client, tx);
     const digest = targetDigest(scope.target);
     // Match C3b's per-user serialization so recovery-state changes cannot
@@ -574,7 +603,7 @@ export function createStepUpTestService(options: { client: Sql }) {
           WHERE "id" = ${proof.id} AND "consumed_at" IS NULL
           RETURNING "id"
         `;
-      if (consumed.length !== 1) return false;
+      if (consumed.length !== 1) return null;
       await recordAudit(
         tx,
         { userId: proof.user_id, businessId: proof.business_id },
@@ -582,7 +611,12 @@ export function createStepUpTestService(options: { client: Sql }) {
         "proof_consumed",
         "consumed",
       );
-      return true;
+      return {
+        userId: proof.user_id,
+        businessId: proof.business_id,
+        action: proof.action,
+        targetDigest: proof.target_digest,
+      };
     }
     if (proof) {
       await recordAudit(
@@ -593,14 +627,16 @@ export function createStepUpTestService(options: { client: Sql }) {
         proof.consumed_at ? "replayed" : "stale",
       );
     }
-    return false;
+    return null;
   }
 
   /** Atomically consumes proof only for its original live session and exact action target. */
   async function consumeProof(proofId: string, scope: Scope): Promise<boolean> {
     if (!isScopeValid(scope)) return false;
     await assertIsolatedTestDatabase(client, client);
-    return client.begin((tx) => consumeProofInTransaction(tx, proofId, scope));
+    return client.begin(
+      async (tx) => (await consumeProofInTransaction(tx, proofId, scope)) !== null,
+    );
   }
 
   /** Test hook simulating a security-event epoch change; not a production API. */
@@ -614,11 +650,13 @@ export function createStepUpTestService(options: { client: Sql }) {
     return rows[0]?.security_epoch ?? null;
   }
 
-  return {
+  const service = {
     startChallenge,
     verifyAssertion,
     consumeProof,
     consumeProofInTransaction,
     advanceSyntheticSecurityEpoch,
   };
+  stepUpTestServiceClients.set(service, client);
+  return service;
 }

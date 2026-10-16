@@ -617,6 +617,10 @@ export const protectedActionTestEffect = pgTable(
   "protected_action_test_effect",
   {
     id: text("id").primaryKey(),
+    proofId: text("proof_id")
+      .notNull()
+      .unique()
+      .references(() => stepUpProof.id, { onDelete: "cascade" }),
     userId: text("user_id")
       .notNull()
       .references(() => stepUpTestIdentity.userId, { onDelete: "cascade" }),
