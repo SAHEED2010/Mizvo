@@ -36,6 +36,27 @@
       "when": 1792082712443,
       "tag": "0004_passkey_enrollment",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792135947599,
+      "tag": "0005_whole_maverick",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792136139536,
+      "tag": "0006_yellow_purple_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1792139041266,
+      "tag": "0007_nifty_sentry",
+      "breakpoints": true
     }
   ]
 }
