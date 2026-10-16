@@ -1580,7 +1580,7 @@ postgresSuite("authentication PostgreSQL invariants", () => {
       await cdp.send("WebAuthn.clearCredentials", { authenticatorId });
       await cdp.send("WebAuthn.addCredential", {
         authenticatorId,
-        ...enrolledVirtualCredential,
+        credential: enrolledVirtualCredential,
       });
 
       const userAfter =
