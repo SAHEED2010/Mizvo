@@ -1,6 +1,6 @@
 # Phase C3c — recent WebAuthn step-up: proposed security design
 
-- **Status:** Proposed for independent security review; **no C3c implementation or activation is approved by this document**
+- **Status:** Approved bounded development/test implementation direction by merged PR #20; production activation and privileged use remain unapproved
 - **Parent:** Build 002 Phase C, issue #8
 - **Architecture:** [ADR-006](../decisions/006-passkeys-recovery-and-step-up.md)
 - **Prerequisites:** C3a local-only verified-phone passkey enrollment merged in PR #16; C3b synthetic-only recovery primitives merged in PR #19
@@ -10,7 +10,7 @@
 
 C3c will eventually require a **fresh, cryptographically validated WebAuthn authentication assertion** before privileged owner operations. A login session, OTP, recently enrolled passkey, recovery-code grant or generic session-freshness flag is **not** an authenticated step-up. The design must distinguish (a) a valid cryptographic assertion from (b) **trusted-credential eligibility**, (c) the user's current membership/authorization, and (d) a later C3d permission decision.
 
-**First implementation recommendation, subject to review:** an isolated **development/test-only internal step-up assertion verifier**, persistent one-time challenge/proof records and negative PostgreSQL + Chromium virtual-authenticator tests. No production/public step-up HTTP ceremony, passkey sign-in or privileged owner action. Do **not** wire internal proofs into \`currentOwnerSensitiveActionDecision\` or return \`allowed: true\` to business routes.
+**Approved first implementation scope:** an isolated **development/test-only internal step-up assertion verifier**, persistent one-time challenge/proof records and negative PostgreSQL + Chromium virtual-authenticator tests. No production/public step-up HTTP ceremony, passkey sign-in or privileged owner action. Do **not** wire internal proofs into \`currentOwnerSensitiveActionDecision\` or return \`allowed: true\` to business routes. Issue #21 and the green post-merge CI run gate the implementation work.
 
 ## Existing system constraints
 
@@ -97,4 +97,4 @@ A WebAuthn assertion proves use of a credential in response to a challenge; it d
 - [SimpleWebAuthn server documentation](https://simplewebauthn.dev/docs/packages/server)
 - [Better Auth Passkey plugin](https://www.better-auth.com/docs/plugins/passkey)
 
-**No C3c code, privileged action, account recovery or passkey authentication endpoint is approved by drafting this design.** All production activation and any permission-gate removal require separate architecture/security approval.
+This design and the implementation authorization in Issue #21 approve only the bounded synthetic test foundation. They do not approve public step-up or passkey authentication endpoints, privileged actions, live recovery, or C2 permission-gate removal. Production activation and any privilege-gate change require separate architecture/security approval.
