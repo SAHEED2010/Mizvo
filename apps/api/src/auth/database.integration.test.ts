@@ -21,6 +21,7 @@ import {
   revokePhoneInvitation,
 } from "./phone-invitations.js";
 import { requireVerifiedPasskeyEnrollment } from "./plugins.js";
+import { createProtectedActionTestHarness } from "./protected-action-test-harness.js";
 import { createRecoveryCodeTestService } from "./recovery-codes.js";
 import type { SmsTransport } from "./sms.js";
 import { createStepUpTestService } from "./step-up-test-service.js";
@@ -965,6 +966,12 @@ postgresSuite("authentication PostgreSQL invariants", () => {
     ).rejects.toMatchObject({ code: "invalid_invitation" });
     await client`UPDATE "user" SET "phone_number_verified" = true WHERE "id" = ${users[1]}`;
 
+    const recipientMembershipBeforeAcceptance = await client`
+      SELECT "role" FROM "member"
+      WHERE "organization_id" = ${organizationId} AND "user_id" = ${users[1]}
+    `;
+    expect(recipientMembershipBeforeAcceptance).toEqual([]);
+
     const [stillPending] =
       await client`SELECT "status" FROM "phone_invitation" WHERE "id" = ${invitation.invitationId}`;
     expect(stillPending?.status).toBe("pending");
@@ -1721,35 +1728,163 @@ postgresSuite("authentication PostgreSQL invariants", () => {
         lifetime_ms: 10 * 60_000,
       });
       expect(new Date(proof.expiresAt).getTime() - Date.now()).toBeLessThanOrEqual(10 * 60_000);
-      expect(await stepUp.consumeProof(proof.proofId, { ...scope, target: "other-target" })).toBe(
-        false,
+
+      // C3d exercises proof validation and a synthetic action effect in one
+      // postgres.js transaction. It intentionally does not call C2's
+      // Better Auth adapter service because the two transaction owners cannot
+      // currently share one connection/commit boundary.
+      const harnessProof = await assertionFor();
+      const harnessEvidence = await harnessProof.result();
+      if (!harnessEvidence) throw new Error("Expected C3d harness proof");
+      const harness = createProtectedActionTestHarness({ client, stepUp });
+      {
+        const wrongTarget = await harness.applySyntheticEffect({
+          proofId: harnessEvidence.proofId,
+          scope: { ...scope, target: "different-invitation-target" },
+        });
+        expect(wrongTarget).toEqual({ allowed: false });
+        const wrongBusiness = await harness.applySyntheticEffect({
+          proofId: harnessEvidence.proofId,
+          scope: { ...scope, businessId: "different-business" },
+        });
+        expect(wrongBusiness).toEqual({ allowed: false });
+        const wrongSession = await harness.applySyntheticEffect({
+          proofId: harnessEvidence.proofId,
+          scope: { ...scope, sessionId: "different-session" },
+        });
+        expect(wrongSession).toEqual({ allowed: false });
+
+        // A database-side insert failure rolls back both the proof claim and effect.
+        await client.unsafe(
+          `CREATE FUNCTION c3d_test_reject_effect() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic insert failure'; END $$`,
+        );
+        await client.unsafe(
+          `CREATE TRIGGER c3d_test_reject_effect BEFORE INSERT ON protected_action_test_effect FOR EACH ROW EXECUTE FUNCTION c3d_test_reject_effect()`,
+        );
+        await expect(
+          harness.applySyntheticEffect({ proofId: harnessEvidence.proofId, scope }),
+        ).rejects.toThrow("synthetic insert failure");
+        await client.unsafe(`DROP TRIGGER c3d_test_reject_effect ON protected_action_test_effect`);
+        await client.unsafe(`DROP FUNCTION c3d_test_reject_effect()`);
+        const afterRollback = await client`
+          SELECT "consumed_at" FROM "step_up_proof" WHERE "id" = ${harnessEvidence.proofId}
+        `;
+        expect(afterRollback[0]?.consumed_at).toBeNull();
+        const retry = await harness.applySyntheticEffect({
+          proofId: harnessEvidence.proofId,
+          scope,
+        });
+        expect(retry.allowed).toBe(true);
+        if (!retry.allowed) throw new Error("Expected exact proof scope to commit an effect");
+        const committedEffect = await client`
+          SELECT "proof_id", "user_id", "business_id", "action", "target_digest"
+          FROM "protected_action_test_effect" WHERE "id" = ${retry.effectId}
+        `;
+        expect(committedEffect).toEqual([
+          {
+            proof_id: harnessEvidence.proofId,
+            user_id: userId,
+            business_id: businessId,
+            action: scope.action,
+            target_digest: createHash("sha256").update(scope.target).digest("hex"),
+          },
+        ]);
+
+        const revokeScope = {
+          ...scope,
+          action: "business.invitation.revoke",
+          target: "synthetic-pending-invitation-id",
+        };
+        const revokeEvidence = await (await assertionFor(revokeScope)).result();
+        if (!revokeEvidence) throw new Error("Expected exact invitation-revocation proof");
+        const revokeResult = await harness.applySyntheticEffect({
+          proofId: revokeEvidence.proofId,
+          scope: revokeScope,
+        });
+        expect(revokeResult.allowed).toBe(true);
+        const replay = await harness.applySyntheticEffect({
+          proofId: harnessEvidence.proofId,
+          scope,
+        });
+        expect(replay).toEqual({ allowed: false });
+      }
+
+      const concurrentEvidence = await (await assertionFor()).result();
+      if (!concurrentEvidence) throw new Error("Expected concurrent harness proof");
+      const pooledHarness = createProtectedActionTestHarness({ client, stepUp });
+      const claims = await Promise.all(
+        Array.from({ length: 3 }, () =>
+          pooledHarness.applySyntheticEffect({
+            proofId: concurrentEvidence.proofId,
+            scope,
+          }),
+        ),
       );
+      expect(claims.filter((claim) => claim.allowed)).toHaveLength(1);
+      const concurrentEffects = await client`
+        SELECT "id" FROM "protected_action_test_effect"
+        WHERE "proof_id" = ${concurrentEvidence.proofId}
+      `;
+      expect(concurrentEffects).toHaveLength(1);
+
+      const fakeConsumer = {
+        consumeProofInTransaction: async () => ({
+          userId,
+          businessId,
+          action: scope.action,
+          targetDigest: createHash("sha256").update(scope.target).digest("hex"),
+        }),
+      };
+      expect(() => createProtectedActionTestHarness({ client, stepUp: fakeConsumer })).toThrow(
+        /configuration/i,
+      );
+
+      const originalNodeEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = "production";
+      try {
+        expect(() => createProtectedActionTestHarness({ client, stepUp })).toThrow(
+          /configuration/i,
+        );
+      } finally {
+        process.env.NODE_ENV = originalNodeEnv;
+      }
+      await expect(
+        createProtectedActionTestHarness({ client, stepUp }).applySyntheticEffect({
+          proofId: proof.proofId,
+          scope: { ...scope, action: "business.member.remove" },
+        }),
+      ).rejects.toMatchObject({ code: "invalid_action" });
+      const bindingProof = await (await assertionFor()).result();
+      if (!bindingProof) throw new Error("Expected a fresh proof for scope-binding tests");
       expect(
-        await stepUp.consumeProof(proof.proofId, {
+        await stepUp.consumeProof(bindingProof.proofId, { ...scope, target: "other-target" }),
+      ).toBe(false);
+      expect(
+        await stepUp.consumeProof(bindingProof.proofId, {
           ...scope,
           action: "business.member.remove",
         }),
       ).toBe(false);
       expect(
-        await stepUp.consumeProof(proof.proofId, {
+        await stepUp.consumeProof(bindingProof.proofId, {
           ...scope,
           businessId: "another-business-id",
         }),
       ).toBe(false);
       expect(
-        await stepUp.consumeProof(proof.proofId, {
+        await stepUp.consumeProof(bindingProof.proofId, {
           ...scope,
           sessionId: "another-session-id",
         }),
       ).toBe(false);
       expect(
-        await stepUp.consumeProof(proof.proofId, {
+        await stepUp.consumeProof(bindingProof.proofId, {
           ...scope,
           userId: "another-user-id",
         }),
       ).toBe(false);
-      expect(await stepUp.consumeProof(proof.proofId, scope)).toBe(true);
-      expect(await stepUp.consumeProof(proof.proofId, scope)).toBe(false);
+      expect(await stepUp.consumeProof(bindingProof.proofId, scope)).toBe(true);
+      expect(await stepUp.consumeProof(bindingProof.proofId, scope)).toBe(false);
       expect(await successfulAssertion.result()).toBeNull();
       expect(await currentOwnerSensitiveActionDecision(userId as string)).toEqual({
         allowed: false,

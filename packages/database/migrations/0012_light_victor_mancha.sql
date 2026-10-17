@@ -1,0 +1,3 @@
+ALTER TABLE "protected_action_test_effect" ADD COLUMN "proof_id" text NOT NULL;--> statement-breakpoint
+ALTER TABLE "protected_action_test_effect" ADD CONSTRAINT "protected_action_test_effect_proof_id_step_up_proof_id_fk" FOREIGN KEY ("proof_id") REFERENCES "public"."step_up_proof"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "protected_action_test_effect" ADD CONSTRAINT "protected_action_test_effect_proof_id_unique" UNIQUE("proof_id");

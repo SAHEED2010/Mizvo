@@ -506,7 +506,7 @@ export const stepUpChallenge = pgTable(
     check("step_up_challenge_target_digest_format", sql`${table.targetDigest} ~ '^[0-9a-f]{64}$'`),
     check(
       "step_up_challenge_action_allowed",
-      sql`${table.action} IN ('business.invitation.create', 'business.member.remove', 'business.member.role_change')`,
+      sql`${table.action} IN ('business.invitation.create', 'business.invitation.revoke', 'business.member.remove', 'business.member.role_change')`,
     ),
     check(
       "step_up_challenge_role_allowed",
@@ -570,7 +570,7 @@ export const stepUpProof = pgTable(
     check("step_up_proof_target_digest_format", sql`${table.targetDigest} ~ '^[0-9a-f]{64}$'`),
     check(
       "step_up_proof_action_allowed",
-      sql`${table.action} IN ('business.invitation.create', 'business.member.remove', 'business.member.role_change')`,
+      sql`${table.action} IN ('business.invitation.create', 'business.invitation.revoke', 'business.member.remove', 'business.member.role_change')`,
     ),
     check(
       "step_up_proof_role_allowed",
@@ -609,6 +609,41 @@ export const stepUpTestAuditEvent = pgTable(
     check(
       "step_up_test_audit_fingerprint_format",
       sql`${table.credentialFingerprint} IS NULL OR ${table.credentialFingerprint} ~ '^[0-9a-f]{64}$'`,
+    ),
+  ],
+);
+
+export const protectedActionTestEffect = pgTable(
+  "protected_action_test_effect",
+  {
+    id: text("id").primaryKey(),
+    proofId: text("proof_id")
+      .notNull()
+      .unique()
+      .references(() => stepUpProof.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => stepUpTestIdentity.userId, { onDelete: "cascade" }),
+    businessId: text("business_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    action: text("action").notNull(),
+    targetDigest: text("target_digest").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("protected_action_test_effect_scope_idx").on(
+      table.userId,
+      table.businessId,
+      table.action,
+    ),
+    check(
+      "protected_action_test_effect_action_allowed",
+      sql`${table.action} IN ('business.invitation.create', 'business.invitation.revoke')`,
+    ),
+    check(
+      "protected_action_test_effect_target_digest_format",
+      sql`${table.targetDigest} ~ '^[0-9a-f]{64}$'`,
     ),
   ],
 );
